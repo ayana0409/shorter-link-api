@@ -7,7 +7,7 @@ import { InjectModel } from "@nestjs/mongoose/dist";
 import { CreateShortenerDto } from "./dto/create-shortener.dto";
 import { UpdateShortenerDto } from "./dto/update-shortener.dto";
 import { Shortener } from "./schema/shortener.schema";
-import { Model } from "mongoose";
+import { Model, Types } from "mongoose";
 import { ConfigService } from "@nestjs/config";
 import * as dotenv from "dotenv";
 import * as bcrypt from "bcrypt";
@@ -212,6 +212,68 @@ export class ShortenerService {
     return this.shortenerModel.countDocuments(query).exec();
   }
 
+  private buildIdsQuery(ids: string[], search?: string, status?: string) {
+    const query: any = { _id: { $in: ids } };
+
+    if (search) {
+      const regex = { $regex: search, $options: "i" };
+      query.$or = [
+        { siteName: regex },
+        { originalUrl: regex },
+        { shortUrl: regex },
+      ];
+    }
+
+    if (status && status !== "all") {
+      if (status === "valid") {
+        query.status = "active";
+        query.$or = [
+          { noExpiration: true },
+          { expiresAt: { $gt: new Date() } },
+        ];
+      } else if (status === "expired") {
+        query.status = { $ne: "disabled" };
+        query.noExpiration = false;
+        query.expiresAt = { $lte: new Date() };
+      } else if (status === "disabled") {
+        query.status = "disabled";
+      }
+    }
+
+    return query;
+  }
+
+  async findByIds(
+    ids: string[],
+    search?: string,
+    status?: string,
+    sortBy = "createdAt",
+    sortOrder = "desc",
+    page = 1,
+    limit = 5,
+  ) {
+    const query = this.buildIdsQuery(ids, search, status);
+    const sort = this.buildSort(sortBy, sortOrder);
+    const links = await this.shortenerModel
+      .find(query)
+      .select("+password")
+      .sort(sort)
+      .skip((page - 1) * limit)
+      .limit(limit)
+      .lean()
+      .exec();
+
+    return links.map(({ password, ...link }) => ({
+      ...link,
+      passwordProtected: Boolean(password),
+    }));
+  }
+
+  async countByIds(ids: string[], search?: string, status?: string) {
+    const query = this.buildIdsQuery(ids, search, status);
+    return this.shortenerModel.countDocuments(query).exec();
+  }
+
   async getDailyShortenerLimit(userId?: string): Promise<number> {
     if (!userId) {
       return this.configManagerService.getNumberValue(
@@ -361,6 +423,52 @@ export class ShortenerService {
       ...result,
       passwordProtected: Boolean(password),
     };
+  }
+
+  private extractShortUrlCode(shortUrl: string): string {
+    if (!shortUrl) return shortUrl;
+    const match = shortUrl.match(/\/s\/([^/?#]+)/i);
+    if (match && match[1]) {
+      return match[1];
+    }
+    const parts = shortUrl.split(/[\/\\]/).filter(Boolean);
+    return parts.length ? parts[parts.length - 1] : shortUrl;
+  }
+
+  async findByShortUrlCode(shortUrl: string) {
+    const code = this.extractShortUrlCode(shortUrl);
+    return this.shortenerModel.findOne({ shortUrl: code }).exec();
+  }
+
+  async findByOriginalUrl(originalUrl: string) {
+    return this.shortenerModel.findOne({ originalUrl }).exec();
+  }
+
+  async attachGroupsToShorteners(shortenerIds: string[], groupId: string) {
+    await this.shortenerModel
+      .updateMany(
+        { _id: { $in: shortenerIds.map((id) => new Types.ObjectId(id)) } },
+        { $addToSet: { groupIds: new Types.ObjectId(groupId) } },
+      )
+      .exec();
+  }
+
+  async detachGroupFromShorteners(groupId: string) {
+    await this.shortenerModel
+      .updateMany(
+        { groupIds: new Types.ObjectId(groupId) },
+        { $pull: { groupIds: new Types.ObjectId(groupId) } },
+      )
+      .exec();
+  }
+
+  async detachGroupFromShortener(shortenerId: string, groupId: string) {
+    await this.shortenerModel
+      .updateOne(
+        { _id: new Types.ObjectId(shortenerId) },
+        { $pull: { groupIds: new Types.ObjectId(groupId) } },
+      )
+      .exec();
   }
 
   async validateAndIncrementClick(shortUrl: string, password?: string) {

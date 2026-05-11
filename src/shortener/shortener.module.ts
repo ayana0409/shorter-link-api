@@ -5,11 +5,13 @@ import { Shortener, ShortenerSchema } from "./schema/shortener.schema";
 import { MongooseModule } from "@nestjs/mongoose/dist/mongoose.module";
 import { AccountModule } from "../account/account.module";
 import { ConfigModule } from "../config/config.module";
+import { Group, GroupSchema } from "../group/schemas/group.schema";
 
 @Module({
   imports: [
     MongooseModule.forFeature([
       { name: Shortener.name, schema: ShortenerSchema },
+      { name: Group.name, schema: GroupSchema },
     ]),
     ConfigModule,
     forwardRef(() => AccountModule),

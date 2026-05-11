@@ -3,6 +3,7 @@ import {
   ForbiddenException,
   Injectable,
   NotFoundException,
+  UnauthorizedException,
 } from "@nestjs/common";
 import { CreateAccountDto } from "./dto/create-account.dto";
 import { UpdateAccountDto } from "./dto/update-account.dto";
@@ -305,5 +306,26 @@ export class AccountService {
       return updatedAccount;
     }
     return account;
+  }
+
+  async validatePasswordById(
+    userId: string,
+    password: string,
+  ): Promise<boolean> {
+    if (!password || !password.trim()) {
+      throw new UnauthorizedException("Password is required");
+    }
+
+    const account = await this.accountModel.findById(userId).exec();
+    if (!account) {
+      throw new NotFoundException(`Account with ID ${userId} not found`);
+    }
+
+    const isPasswordValid = await bcrypt.compare(password, account.password);
+    if (!isPasswordValid) {
+      throw new UnauthorizedException("Invalid password");
+    }
+
+    return true;
   }
 }

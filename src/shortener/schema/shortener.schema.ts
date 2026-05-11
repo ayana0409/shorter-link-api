@@ -1,4 +1,5 @@
 import { Prop, Schema, SchemaFactory } from "@nestjs/mongoose/dist";
+import { Types } from "mongoose";
 
 @Schema({ timestamps: true })
 export class Shortener {
@@ -31,6 +32,9 @@ export class Shortener {
 
   @Prop({ required: false })
   userId?: string;
+
+  @Prop({ type: [{ type: Types.ObjectId, ref: "Group" }], default: [] })
+  groupIds!: Types.ObjectId[];
 }
 
 export const ShortenerSchema = SchemaFactory.createForClass(Shortener);
