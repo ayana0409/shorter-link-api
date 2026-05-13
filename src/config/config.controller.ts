@@ -43,6 +43,10 @@ export class ConfigController {
       "SHORT_URL_LENGTH",
       "SHORT_URL_EXPIRATION_DAYS",
       "MONGO_DB_CONNECTIONSTRING",
+      "MAX_GROUPS_COUNT",
+      "MAX_MEMBERS_PER_GROUP",
+      "RATE_LIMIT_TTL",
+      "RATE_LIMIT_MAX",
     ];
 
     if (!allowedKeys.includes(key)) {
