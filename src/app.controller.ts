@@ -14,4 +14,9 @@ export class AppController {
   ping() {
     return this.appService.ping();
   }
+
+  @Get("health")
+  health() {
+    return this.appService.health();
+  }
 }

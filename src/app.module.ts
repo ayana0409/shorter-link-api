@@ -11,12 +11,23 @@ import { GroupModule } from "./group/group.module";
 import { AllExceptionsFilter } from "./common/filters/all-exceptions.filter";
 import { LoggingInterceptor } from "./common/interceptors/logging.interceptor";
 import { ConfigModule as SystemConfigModule } from "./config/config.module";
+import { ConfigManagerService } from "./config/config-manager.service";
+import { ThrottlerModule } from "@nestjs/throttler";
 
 @Module({
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
       envFilePath: ".env",
+    }),
+    ThrottlerModule.forRootAsync({
+      imports: [SystemConfigModule],
+      inject: [ConfigManagerService],
+      useFactory: async (configManager: ConfigManagerService) => {
+        const ttl = await configManager.getNumberValue("RATE_LIMIT_TTL", 60000);
+        const limit = await configManager.getNumberValue("RATE_LIMIT_MAX", 100);
+        return [{ ttl, limit }];
+      },
     }),
     MongooseModule.forRootAsync({
       imports: [ConfigModule],

@@ -4,9 +4,14 @@ import { AccountService } from "./account/account.service";
 import { ConfigService } from "@nestjs/config";
 import { AllExceptionsFilter } from "./common/filters/all-exceptions.filter";
 import { LoggingInterceptor } from "./common/interceptors/logging.interceptor";
+import helmet from "helmet";
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
+
+  // Security headers
+  app.use(helmet());
+
   app.useGlobalFilters(app.get(AllExceptionsFilter));
   app.useGlobalInterceptors(app.get(LoggingInterceptor));
   const configService = app.get(ConfigService);
@@ -33,8 +38,9 @@ async function bootstrap() {
   );
   await accountService.ensureDefaultLevelExists();
 
-  // const port = Number(configService.get<string>("PORT", "3000"));
-  // await app.listen(port);
+  // Graceful shutdown
+  app.enableShutdownHooks();
+
   const port = process.env.PORT || 3000;
   await app.listen(port, "0.0.0.0");
 

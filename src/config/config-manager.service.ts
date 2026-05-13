@@ -65,6 +65,18 @@ export class ConfigManagerService {
         description: "Số link tối đa trong một nhóm",
         type: "number",
       },
+      {
+        key: "RATE_LIMIT_TTL",
+        value: this.configService.get<string>("RATE_LIMIT_TTL", "60000"),
+        description: "Thời gian giới hạn rate limit (ms)",
+        type: "number",
+      },
+      {
+        key: "RATE_LIMIT_MAX",
+        value: this.configService.get<string>("RATE_LIMIT_MAX", "100"),
+        description: "Số request tối đa trong khoảng thời gian rate limit",
+        type: "number",
+      },
     ];
 
     for (const config of defaultConfigs) {
