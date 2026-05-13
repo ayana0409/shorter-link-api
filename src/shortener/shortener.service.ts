@@ -15,8 +15,7 @@ import axios from "axios";
 import * as cheerio from "cheerio";
 import * as he from "he";
 import { ConfigManagerService } from "../config/config-manager.service";
-
-import { buildSort, paginateModel } from "../common/pagination";
+import { I18nService } from "../common/i18n";
 import { AccountService } from "../account/account.service";
 dotenv.config();
 
@@ -27,16 +26,20 @@ export class ShortenerService {
     private configService: ConfigService,
     private configManagerService: ConfigManagerService,
     private accountService: AccountService,
+    private i18n: I18nService,
   ) {}
+
+  /** Resolve a message using the default locale */
+  private msg(keyPath: string, ...args: any[]): string {
+    return this.i18n.t(this.i18n.defaultLocale, keyPath, ...args);
+  }
 
   async create(createShortenerDto: CreateShortenerDto) {
     const { originalUrl, userId } = createShortenerDto;
 
     // Check password permission
     if (createShortenerDto.password && !(await this.canUsePassword(userId))) {
-      throw new BadRequestException(
-        "Your current level does not allow password protection for links.",
-      );
+      throw new BadRequestException(this.msg("shortener.PASSWORD_NOT_ALLOWED"));
     }
 
     // Check custom expiration permission
@@ -45,7 +48,7 @@ export class ShortenerService {
       !(await this.canUseCustomExpiration(userId))
     ) {
       throw new BadRequestException(
-        "Your current level does not allow custom expiration dates for links.",
+        this.msg("shortener.CUSTOM_EXPIRATION_NOT_ALLOWED"),
       );
     }
 
@@ -418,7 +421,7 @@ export class ShortenerService {
     const used = await this.countDailyCreatedByUser(userId);
     if (used + needed > limit) {
       throw new BadRequestException(
-        `Bạn đã đạt giới hạn ${limit} liên kết hôm nay.`,
+        this.msg("shortener.DAILY_LIMIT_REACHED", limit),
       );
     }
   }
@@ -437,10 +440,10 @@ export class ShortenerService {
       : new Date(endDate.getTime() - 7 * 24 * 60 * 60 * 1000);
 
     if (Number.isNaN(startDate.getTime())) {
-      throw new Error("Invalid from date");
+      throw new Error(this.msg("shortener.INVALID_FROM_DATE"));
     }
     if (Number.isNaN(endDate.getTime())) {
-      throw new Error("Invalid to date");
+      throw new Error(this.msg("shortener.INVALID_TO_DATE"));
     }
 
     const match: any = {};
@@ -678,18 +681,18 @@ export class ShortenerService {
       .exec();
 
     if (!doc) {
-      throw new NotFoundException("Short link not found or expired");
+      throw new NotFoundException(
+        this.msg("shortener.SHORT_LINK_NOT_FOUND_OR_EXPIRED"),
+      );
     }
 
     if (doc.password) {
       if (!password) {
-        throw new BadRequestException(
-          "Vui lòng nhập mật khẩu để truy cập liên kết này",
-        );
+        throw new BadRequestException(this.msg("shortener.PASSWORD_REQUIRED"));
       }
       const isMatch = await bcrypt.compare(password, doc.password);
       if (!isMatch) {
-        throw new BadRequestException("Mật khẩu không đúng");
+        throw new BadRequestException(this.msg("shortener.PASSWORD_INCORRECT"));
       }
     }
 

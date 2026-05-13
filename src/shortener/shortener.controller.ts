@@ -18,13 +18,20 @@ import { UpdateShortenerDto } from "./dto/update-shortener.dto";
 import { AuthGuard } from "../auth/auth.guard";
 import { AccountService } from "../account/account.service";
 import { AdminGuard } from "../auth/admin.guard";
+import { I18nService } from "../common/i18n";
 
 @Controller("shortener")
 export class ShortenerController {
   constructor(
     private readonly shortenerService: ShortenerService,
     private readonly accountService: AccountService,
+    private readonly i18n: I18nService,
   ) {}
+
+  /** Resolve a message using the default locale */
+  private msg(keyPath: string, ...args: any[]): string {
+    return this.i18n.t(this.i18n.defaultLocale, keyPath, ...args);
+  }
 
   @Post()
   @UseGuards(AuthGuard)
@@ -41,7 +48,7 @@ export class ShortenerController {
       const used = await this.shortenerService.countDailyCreatedByUser(userId);
       if (used >= limit) {
         throw new BadRequestException(
-          `Bạn đã đạt giới hạn ${limit} liên kết hôm nay. Vui lòng thử lại vào ngày mai.`,
+          this.msg("shortener.DAILY_LIMIT_REACHED_TRY_TOMORROW", limit),
         );
       }
 
@@ -178,7 +185,9 @@ export class ShortenerController {
   async findByShortUrl(@Param("shortUrl") shortUrl: string) {
     const result = await this.shortenerService.findByShortUrl(shortUrl);
     if (!result) {
-      throw new NotFoundException("Short link not found or expired");
+      throw new NotFoundException(
+        this.msg("shortener.SHORT_LINK_NOT_FOUND_OR_EXPIRED"),
+      );
     }
     return result;
   }

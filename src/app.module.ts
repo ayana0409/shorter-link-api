@@ -13,6 +13,7 @@ import { LoggingInterceptor } from "./common/interceptors/logging.interceptor";
 import { ConfigModule as SystemConfigModule } from "./config/config.module";
 import { ConfigManagerService } from "./config/config-manager.service";
 import { ThrottlerModule } from "@nestjs/throttler";
+import { I18nModule } from "./common/i18n";
 
 @Module({
   imports: [
@@ -46,6 +47,7 @@ import { ThrottlerModule } from "@nestjs/throttler";
     AuditLogModule,
     GroupModule,
     SystemConfigModule,
+    I18nModule,
   ],
   controllers: [AppController],
   providers: [AppService, LoggingInterceptor, AllExceptionsFilter],
