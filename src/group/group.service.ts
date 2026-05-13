@@ -277,6 +277,7 @@ export class GroupService {
     const group = await this.findOne(groupId, userId);
 
     const shortenerIds = [] as Types.ObjectId[];
+    const linksToCreate = [] as string[];
 
     for (const link of links) {
       if (!link || !link.trim()) continue;
@@ -287,13 +288,25 @@ export class GroupService {
         (await this.shortenerService.findByOriginalUrl(normalizedLink));
 
       if (!shortener) {
-        shortener = await this.shortenerService.create({
-          originalUrl: normalizedLink,
+        linksToCreate.push(normalizedLink);
+      } else {
+        shortenerIds.push(new Types.ObjectId(shortener._id));
+      }
+    }
+
+    if (linksToCreate.length > 0) {
+      await this.shortenerService.verifyDailyLimit(
+        userId,
+        linksToCreate.length,
+      );
+
+      for (const url of linksToCreate) {
+        const shortener = await this.shortenerService.create({
+          originalUrl: url,
           userId,
         });
+        shortenerIds.push(new Types.ObjectId(shortener._id));
       }
-
-      shortenerIds.push(new Types.ObjectId(shortener._id));
     }
 
     if (shortenerIds.length === 0) {

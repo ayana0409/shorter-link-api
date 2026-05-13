@@ -336,6 +336,21 @@ export class ShortenerService {
       .exec();
   }
 
+  async verifyDailyLimit(userId: string, needed: number = 1) {
+    const account = await this.accountService.findOne(userId);
+    if (account.role === "admin") {
+      return;
+    }
+
+    const limit = await this.getDailyShortenerLimit(userId);
+    const used = await this.countDailyCreatedByUser(userId);
+    if (used + needed > limit) {
+      throw new BadRequestException(
+        `Bạn đã đạt giới hạn ${limit} liên kết hôm nay.`,
+      );
+    }
+  }
+
   async getLinkCreationStats(
     userId: string | null,
     range = "daily",
