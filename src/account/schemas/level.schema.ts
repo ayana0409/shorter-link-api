@@ -22,6 +22,15 @@ export class Level {
 
   @Prop({ default: true })
   active!: boolean;
+
+  @Prop({ required: false, min: 0 })
+  maxGroupsCount?: number;
+
+  @Prop({ required: false, min: 0 })
+  maxMembersPerGroup?: number;
+
+  @Prop({ required: false, min: 0 })
+  maxLinksPerGroup?: number;
 }
 
 export const LevelSchema = SchemaFactory.createForClass(Level);

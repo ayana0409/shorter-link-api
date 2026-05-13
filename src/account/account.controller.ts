@@ -101,6 +101,19 @@ export class AccountController {
     return this.accountService.findAll();
   }
 
+  @Get("limits")
+  @UseGuards(AuthGuard)
+  async getUserLimits(@Request() req) {
+    const userId = req.user?._id;
+    const [maxGroupsCount, maxMembersPerGroup, maxLinksPerGroup] =
+      await Promise.all([
+        this.shortenerService.getMaxGroupsCount(userId),
+        this.shortenerService.getMaxMembersPerGroup(userId),
+        this.shortenerService.getMaxLinksPerGroup(userId),
+      ]);
+    return { maxGroupsCount, maxMembersPerGroup, maxLinksPerGroup };
+  }
+
   @Get(":id")
   findOne(@Param("id") id: string) {
     return this.accountService.findOne(id);

@@ -3,7 +3,11 @@ import { InjectModel } from "@nestjs/mongoose";
 import { Model, Types } from "mongoose";
 import { Group, GroupDocument } from "./schemas/group.schema";
 import { CreateGroupDto, UpdateGroupDto } from "./dto/group.dto";
-import { NotFoundException, ForbiddenException } from "@nestjs/common";
+import {
+  NotFoundException,
+  ForbiddenException,
+  BadRequestException,
+} from "@nestjs/common";
 import { ShortenerService } from "../shortener/shortener.service";
 import { AccountService } from "../account/account.service";
 import { AccountDocument } from "../account/schemas/account.schema";
@@ -20,6 +24,21 @@ export class GroupService {
     createGroupDto: CreateGroupDto,
     ownerId: string,
   ): Promise<Group> {
+    // Check max groups limit
+    const maxGroupsCount =
+      await this.shortenerService.getMaxGroupsCount(ownerId);
+    const currentGroupsCount = await this.groupModel
+      .countDocuments({
+        owner: new Types.ObjectId(ownerId),
+      })
+      .exec();
+
+    if (currentGroupsCount >= maxGroupsCount) {
+      throw new BadRequestException(
+        `Bạn đã đạt giới hạn nhóm tối đa: (${maxGroupsCount})`,
+      );
+    }
+
     const newGroup = new this.groupModel({
       ...createGroupDto,
       owner: new Types.ObjectId(ownerId),
@@ -71,6 +90,11 @@ export class GroupService {
     }
 
     return group;
+  }
+
+  // Lightweight findOne without populate for internal use
+  async findOneLightweight(id: string): Promise<Group | null> {
+    return this.groupModel.findById(id).exec();
   }
 
   private getEntityId(entity: any): string {
@@ -210,6 +234,17 @@ export class GroupService {
       return this.findOne(groupId, actorId);
     }
 
+    // Check max members per group limit before adding
+    const maxMembersPerGroup =
+      await this.shortenerService.getMaxMembersPerGroup(actorId);
+    const totalMembers = group.members.length + 1; // +1 for the new member being added
+
+    if (totalMembers > maxMembersPerGroup) {
+      throw new BadRequestException(
+        `Giới hạn thành viên nhóm là (${maxMembersPerGroup})`,
+      );
+    }
+
     await this.groupModel.findByIdAndUpdate(
       groupId,
       {
@@ -274,58 +309,110 @@ export class GroupService {
     links: string[],
     userId: string,
   ): Promise<Group> {
-    const group = await this.findOne(groupId, userId);
-
-    const shortenerIds = [] as Types.ObjectId[];
-    const linksToCreate = [] as string[];
-
-    for (const link of links) {
-      if (!link || !link.trim()) continue;
-      const normalizedLink = link.trim();
-
-      let shortener =
-        (await this.shortenerService.findByShortUrlCode(normalizedLink)) ||
-        (await this.shortenerService.findByOriginalUrl(normalizedLink));
-
-      if (!shortener) {
-        linksToCreate.push(normalizedLink);
-      } else {
-        shortenerIds.push(new Types.ObjectId(shortener._id));
-      }
+    // Use lightweight check first - only verify permission
+    const group = await this.findOneLightweight(groupId);
+    if (!group) {
+      throw new NotFoundException("Group not found");
     }
 
+    // Check membership
+    const isMember =
+      this.getEntityId(group.owner) === userId ||
+      group.members.some(
+        (member) => this.getEntityId(member.account) === userId,
+      );
+    if (!isMember) {
+      throw new ForbiddenException(
+        "You do not have permission to access this group",
+      );
+    }
+
+    const normalizedLinks = links
+      .filter((link) => link && link.trim())
+      .map((link) => link.trim());
+
+    if (normalizedLinks.length === 0) {
+      return this.findOne(groupId, userId);
+    }
+
+    // Check max links per group limit
+    const maxLinksPerGroup =
+      await this.shortenerService.getMaxLinksPerGroup(userId);
+    const currentLinkCount = group.links?.length ?? 0;
+    const newTotal = currentLinkCount + normalizedLinks.length;
+    if (newTotal > maxLinksPerGroup) {
+      throw new BadRequestException(
+        `Nhóm đã có ${currentLinkCount} liên kết. Giới hạn tối đa là ${maxLinksPerGroup} liên kết/nhóm.`,
+      );
+    }
+
+    // 1. Batch fetch existing shorteners
+    const existingShorteners =
+      await this.shortenerService.findExistingShorteners(
+        normalizedLinks,
+        userId,
+      );
+    const existingShortenerIds = existingShorteners.map((s) => s._id);
+
+    // 2. Determine which links need to be created
+    const foundLinks = new Set<string>();
+    existingShorteners.forEach((s) => {
+      foundLinks.add(s.originalUrl);
+      foundLinks.add(s.shortUrl);
+    });
+
+    const linksToCreate = normalizedLinks.filter((link) => {
+      if (foundLinks.has(link)) return false;
+
+      // If it's a full short URL like 'host/s/code', check if the code was found
+      if (link.includes("/s/")) {
+        const code = link.split("/s/")[1].split(/[/?#]/)[0];
+        if (foundLinks.has(code)) return false;
+      }
+
+      return true;
+    });
+
+    // 3. Verify daily limit ONCE before batch creation
     if (linksToCreate.length > 0) {
       await this.shortenerService.verifyDailyLimit(
         userId,
         linksToCreate.length,
       );
-
-      for (const url of linksToCreate) {
-        const shortener = await this.shortenerService.create({
-          originalUrl: url,
-          userId,
-        });
-        shortenerIds.push(new Types.ObjectId(shortener._id));
-      }
     }
 
-    if (shortenerIds.length === 0) {
-      return group;
+    // 4. Batch create missing links using optimized method
+    if (linksToCreate.length > 0) {
+      const itemsToCreate = linksToCreate.map((url) => ({
+        originalUrl: url,
+        userId,
+      }));
+
+      const createdShorteners =
+        await this.shortenerService.createBatch(itemsToCreate);
+      existingShortenerIds.push(
+        ...createdShorteners.map((s) => (s as any)._id),
+      );
     }
 
-    await this.groupModel
-      .findByIdAndUpdate(
+    if (existingShortenerIds.length === 0) {
+      return this.findOne(groupId, userId);
+    }
+
+    // 5. Update group and shorteners concurrently
+    await Promise.all([
+      this.groupModel
+        .findByIdAndUpdate(groupId, {
+          $addToSet: { links: { $each: existingShortenerIds } },
+        })
+        .exec(),
+      this.shortenerService.attachGroupsToShorteners(
+        existingShortenerIds.map((id) => id.toString()),
         groupId,
-        { $addToSet: { links: { $each: shortenerIds } } },
-        { new: true },
-      )
-      .exec();
+      ),
+    ]);
 
-    await this.shortenerService.attachGroupsToShorteners(
-      shortenerIds.map((id) => id.toString()),
-      groupId,
-    );
-
+    // Return populated group
     return this.findOne(groupId, userId);
   }
 

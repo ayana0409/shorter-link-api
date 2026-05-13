@@ -29,4 +29,19 @@ export class CreateLevelDto {
   @IsBoolean()
   @IsOptional()
   active?: boolean;
+
+  @IsNumber()
+  @Min(0)
+  @IsOptional()
+  maxGroupsCount?: number;
+
+  @IsNumber()
+  @Min(0)
+  @IsOptional()
+  maxMembersPerGroup?: number;
+
+  @IsNumber()
+  @Min(0)
+  @IsOptional()
+  maxLinksPerGroup?: number;
 }

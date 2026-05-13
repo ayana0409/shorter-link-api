@@ -321,6 +321,78 @@ export class ShortenerService {
     return false;
   }
 
+  async getMaxGroupsCount(userId?: string): Promise<number> {
+    if (!userId) {
+      return this.configManagerService.getNumberValue("MAX_GROUPS_COUNT", 5);
+    }
+
+    const account = await this.accountService.findOne(userId);
+    if (
+      account.level &&
+      (!account.levelExpirationDate || account.levelExpirationDate > new Date())
+    ) {
+      if (
+        account.level.maxGroupsCount !== undefined &&
+        account.level.maxGroupsCount !== null
+      ) {
+        return account.level.maxGroupsCount;
+      }
+    }
+
+    return this.configManagerService.getNumberValue("MAX_GROUPS_COUNT", 5);
+  }
+
+  async getMaxMembersPerGroup(userId?: string): Promise<number> {
+    if (!userId) {
+      return this.configManagerService.getNumberValue(
+        "MAX_MEMBERS_PER_GROUP",
+        10,
+      );
+    }
+
+    const account = await this.accountService.findOne(userId);
+    if (
+      account.level &&
+      (!account.levelExpirationDate || account.levelExpirationDate > new Date())
+    ) {
+      if (
+        account.level.maxMembersPerGroup !== undefined &&
+        account.level.maxMembersPerGroup !== null
+      ) {
+        return account.level.maxMembersPerGroup;
+      }
+    }
+
+    return this.configManagerService.getNumberValue(
+      "MAX_MEMBERS_PER_GROUP",
+      10,
+    );
+  }
+
+  async getMaxLinksPerGroup(userId?: string): Promise<number> {
+    if (!userId) {
+      return this.configManagerService.getNumberValue(
+        "MAX_LINKS_PER_GROUP",
+        20,
+      );
+    }
+
+    const account = await this.accountService.findOne(userId);
+    if (
+      account.level &&
+      (!account.levelExpirationDate || account.levelExpirationDate > new Date())
+    ) {
+      if (
+        account.level.maxLinksPerGroup !== undefined &&
+        account.level.maxLinksPerGroup !== null
+      ) {
+        return account.level.maxLinksPerGroup;
+      }
+    }
+
+    return this.configManagerService.getNumberValue("MAX_LINKS_PER_GROUP", 20);
+  }
+
   async countDailyCreatedByUser(userId: string): Promise<number> {
     if (!userId) {
       return 0;
@@ -457,6 +529,115 @@ export class ShortenerService {
 
   async findByOriginalUrl(originalUrl: string) {
     return this.shortenerModel.findOne({ originalUrl }).exec();
+  }
+
+  async findExistingShorteners(links: string[], userId: string) {
+    // Thêm userId vào đây
+    const codes = links.map((link) => this.extractShortUrlCode(link));
+    return this.shortenerModel
+      .find({
+        userId: userId, // Thêm điều kiện lọc theo user
+        $or: [{ shortUrl: { $in: codes } }, { originalUrl: { $in: links } }],
+      })
+      .exec();
+  }
+
+  // Batch create shorteners for better performance
+  async createBatch(
+    items: Array<{ originalUrl: string; userId: string; siteName?: string }>,
+  ): Promise<Shortener[]> {
+    if (items.length === 0) return [];
+
+    const userId = items[0].userId;
+    const shortUrlLength = await this.configManagerService.getNumberValue(
+      "SHORT_URL_LENGTH",
+      6,
+    );
+    const shortUrlExpirationMinutes =
+      await this.configManagerService.getNumberValue(
+        "SHORT_URL_EXPIRATION_DAYS",
+        300,
+      );
+
+    // Batch generate unique short URLs
+    const shortUrls = await this.generateUniqueShortUrls(
+      items.length,
+      shortUrlLength,
+    );
+
+    const expirationDate = new Date();
+    expirationDate.setMinutes(
+      expirationDate.getMinutes() + shortUrlExpirationMinutes,
+    );
+
+    const docsToInsert = items.map((item, index) => ({
+      originalUrl: item.originalUrl,
+      shortUrl: shortUrls[index],
+      siteName: item.siteName ?? null,
+      clicks: 0,
+      status: "active",
+      expiresAt: expirationDate,
+      userId: item.userId,
+    }));
+
+    const created = await this.shortenerModel.insertMany(docsToInsert);
+
+    // Fetch page titles asynchronously (fire-and-forget)
+    items.forEach((item, index) => {
+      if (!item.siteName) {
+        this.fetchPageTitle(item.originalUrl)
+          .then((siteName) => {
+            if (siteName) {
+              return this.shortenerModel
+                .findByIdAndUpdate(created[index]._id, { siteName })
+                .exec();
+            }
+            return null;
+          })
+          .catch(() => null);
+      }
+    });
+
+    return created as any as Shortener[];
+  }
+
+  // Batch generate unique short URLs with single DB query
+  async generateUniqueShortUrls(
+    count: number,
+    length: number,
+  ): Promise<string[]> {
+    const shortUrls: string[] = [];
+    const existingCodes = new Set<string>();
+
+    while (shortUrls.length < count) {
+      const needed = count - shortUrls.length;
+      const candidates: string[] = [];
+
+      // Generate candidates with 20% buffer
+      const bufferSize = Math.ceil(needed * 1.2);
+      for (let i = 0; i < bufferSize; i++) {
+        candidates.push(this.generateShortUrl(length));
+      }
+
+      // Batch check all candidates in single query
+      const existing = await this.shortenerModel
+        .find({ shortUrl: { $in: candidates } })
+        .select("shortUrl")
+        .lean()
+        .exec();
+
+      existing.forEach((doc) => existingCodes.add(doc.shortUrl));
+
+      // Filter out existing codes
+      for (const code of candidates) {
+        if (!existingCodes.has(code) && shortUrls.length < count) {
+          shortUrls.push(code);
+          existingCodes.add(code);
+        }
+      }
+    }
+
+    return shortUrls;
   }
 
   async attachGroupsToShorteners(shortenerIds: string[], groupId: string) {
