@@ -21,11 +21,15 @@ import {
 import { Group } from "./schemas/group.schema";
 import { AuthGuard } from "../auth/auth.guard";
 import { Request } from "express";
+import { ShortenerService } from "../shortener/shortener.service";
 
 @Controller("groups")
 @UseGuards(AuthGuard)
 export class GroupController {
-  constructor(private readonly groupService: GroupService) {}
+  constructor(
+    private readonly groupService: GroupService,
+    private readonly shortenerService: ShortenerService,
+  ) {}
 
   private getRequestUserId(req: any): string {
     return req.user?._id || req.user?.sub || req.user?.id;
@@ -154,5 +158,25 @@ export class GroupController {
       pageNumber,
       limitNumber,
     );
+  }
+
+  @Get(":id/limits")
+  async getGroupLimits(@Param("id") id: string) {
+    const group = await this.groupService.findOneLightweight(id);
+    if (!group) {
+      return {
+        maxGroupsCount: null,
+        maxMembersPerGroup: null,
+        maxLinksPerGroup: null,
+      };
+    }
+    const ownerId = group.owner.toString();
+    const [maxGroupsCount, maxMembersPerGroup, maxLinksPerGroup] =
+      await Promise.all([
+        this.shortenerService.getMaxGroupsCount(ownerId),
+        this.shortenerService.getMaxMembersPerGroup(ownerId),
+        this.shortenerService.getMaxLinksPerGroup(ownerId),
+      ]);
+    return { maxGroupsCount, maxMembersPerGroup, maxLinksPerGroup };
   }
 }

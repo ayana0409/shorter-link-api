@@ -16,5 +16,6 @@ import { AccountModule } from "../account/account.module";
   ],
   controllers: [GroupController],
   providers: [GroupService],
+  exports: [GroupService],
 })
 export class GroupModule {}

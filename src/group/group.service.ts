@@ -234,9 +234,10 @@ export class GroupService {
       return this.findOne(groupId, actorId);
     }
 
-    // Check max members per group limit before adding
+    // Check max members per group limit before adding (based on group owner's level)
+    const ownerId = this.getEntityId(group.owner);
     const maxMembersPerGroup =
-      await this.shortenerService.getMaxMembersPerGroup(actorId);
+      await this.shortenerService.getMaxMembersPerGroup(ownerId);
     const totalMembers = group.members.length + 1; // +1 for the new member being added
 
     if (totalMembers > maxMembersPerGroup) {
@@ -335,9 +336,10 @@ export class GroupService {
       return this.findOne(groupId, userId);
     }
 
-    // Check max links per group limit
+    // Check max links per group limit (based on group owner's level)
+    const ownerId = this.getEntityId(group.owner);
     const maxLinksPerGroup =
-      await this.shortenerService.getMaxLinksPerGroup(userId);
+      await this.shortenerService.getMaxLinksPerGroup(ownerId);
     const currentLinkCount = group.links?.length ?? 0;
     const newTotal = currentLinkCount + normalizedLinks.length;
     if (newTotal > maxLinksPerGroup) {
@@ -373,7 +375,7 @@ export class GroupService {
       return true;
     });
 
-    // 3. Verify daily limit ONCE before batch creation
+    // 3. Verify daily limit ONCE before batch creation (based on current user's level)
     if (linksToCreate.length > 0) {
       await this.shortenerService.verifyDailyLimit(
         userId,
