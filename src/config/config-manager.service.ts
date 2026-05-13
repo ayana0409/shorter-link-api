@@ -47,6 +47,24 @@ export class ConfigManagerService {
         type: "string",
         isHidden: true,
       },
+      {
+        key: "MAX_GROUPS_COUNT",
+        value: this.configService.get<string>("MAX_GROUPS_COUNT", "5"),
+        description: "Số nhóm tối đa mà mỗi người dùng có thể tạo",
+        type: "number",
+      },
+      {
+        key: "MAX_MEMBERS_PER_GROUP",
+        value: this.configService.get<string>("MAX_MEMBERS_PER_GROUP", "10"),
+        description: "Số thành viên tối đa trong một nhóm",
+        type: "number",
+      },
+      {
+        key: "MAX_LINKS_PER_GROUP",
+        value: this.configService.get<string>("MAX_LINKS_PER_GROUP", "20"),
+        description: "Số link tối đa trong một nhóm",
+        type: "number",
+      },
     ];
 
     for (const config of defaultConfigs) {
