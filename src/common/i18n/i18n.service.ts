@@ -20,7 +20,7 @@ export class I18nService {
   /**
    * Default locale used when no locale is specified
    */
-  readonly defaultLocale: SupportedLocale = "en-US";
+  readonly defaultLocale: SupportedLocale = "vi-VN";
 
   /**
    * Get the full message dictionary for a locale

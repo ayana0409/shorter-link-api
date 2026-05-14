@@ -11,6 +11,7 @@ import {
 import { ShortenerService } from "../shortener/shortener.service";
 import { AccountService } from "../account/account.service";
 import { AccountDocument } from "../account/schemas/account.schema";
+import { I18nService } from "../common/i18n";
 
 @Injectable()
 export class GroupService {
@@ -18,7 +19,15 @@ export class GroupService {
     @InjectModel(Group.name) private groupModel: Model<GroupDocument>,
     private readonly shortenerService: ShortenerService,
     private readonly accountService: AccountService,
+    private i18n: I18nService,
   ) {}
+
+  /**
+   * Helper to resolve a message using the default locale
+   */
+  private msg(keyPath: string, ...args: any[]): string {
+    return this.i18n.t(this.i18n.defaultLocale, keyPath, ...args);
+  }
 
   async create(
     createGroupDto: CreateGroupDto,
@@ -35,7 +44,7 @@ export class GroupService {
 
     if (currentGroupsCount >= maxGroupsCount) {
       throw new BadRequestException(
-        `Bạn đã đạt giới hạn nhóm tối đa: (${maxGroupsCount})`,
+        this.msg("group.MAX_GROUPS_REACHED", maxGroupsCount),
       );
     }
 
@@ -75,7 +84,7 @@ export class GroupService {
       .exec();
 
     if (!group) {
-      throw new NotFoundException("Group not found");
+      throw new NotFoundException(this.msg("group.NOT_FOUND"));
     }
 
     const isMember =
@@ -84,9 +93,7 @@ export class GroupService {
         (member) => this.getEntityId(member.account) === userId,
       );
     if (!isMember) {
-      throw new ForbiddenException(
-        "You do not have permission to access this group",
-      );
+      throw new ForbiddenException(this.msg("group.ACCESS_DENIED"));
     }
 
     return group;
@@ -136,7 +143,7 @@ export class GroupService {
     const group = await this.findOne(id, userId);
 
     if (!this.isOwner(group, userId)) {
-      throw new ForbiddenException("Only the owner can update the group name");
+      throw new ForbiddenException(this.msg("group.ONLY_OWNER_UPDATE"));
     }
 
     const updatedGroup = await this.groupModel
@@ -150,7 +157,7 @@ export class GroupService {
     const group = await this.findOne(id, userId);
 
     if (!this.isOwner(group, userId)) {
-      throw new ForbiddenException("Only the owner can delete the group");
+      throw new ForbiddenException(this.msg("group.ONLY_OWNER_DELETE"));
     }
 
     if (password) {
@@ -182,8 +189,8 @@ export class GroupService {
     if (!account) {
       throw new NotFoundException(
         isObjectId
-          ? `Account with id or username '${userIdOrUsername}' not found`
-          : `Account with username '${userIdOrUsername}' not found`,
+          ? this.msg("group.ACCOUNT_NOT_FOUND", userIdOrUsername)
+          : this.msg("group.ACCOUNT_NOT_FOUND_BY_USERNAME", userIdOrUsername),
       );
     }
 
@@ -201,15 +208,13 @@ export class GroupService {
 
     const actorRole = this.getMemberRole(group, actorId);
     if (!actorRole || (actorRole !== "owner" && actorRole !== "manager")) {
-      throw new ForbiddenException(
-        "Only the owner or a group manager can add members",
-      );
+      throw new ForbiddenException(this.msg("group.ONLY_OWNER_OR_MANAGER_ADD"));
     }
 
     const targetRole = role || "member";
     if (actorRole === "manager" && targetRole !== "member") {
       throw new ForbiddenException(
-        "Group managers can only add members, not managers",
+        this.msg("group.MANAGER_CAN_ONLY_ADD_MEMBER"),
       );
     }
 
@@ -222,7 +227,7 @@ export class GroupService {
         return group;
       }
       if (!this.isOwner(group, actorId)) {
-        throw new ForbiddenException("Only the owner can change member roles");
+        throw new ForbiddenException(this.msg("group.ONLY_OWNER_CHANGE_ROLE"));
       }
       await this.groupModel.updateOne(
         {
@@ -242,7 +247,7 @@ export class GroupService {
 
     if (totalMembers > maxMembersPerGroup) {
       throw new BadRequestException(
-        `Giới hạn thành viên nhóm là (${maxMembersPerGroup})`,
+        this.msg("group.MAX_MEMBERS_REACHED", maxMembersPerGroup),
       );
     }
 
@@ -276,24 +281,24 @@ export class GroupService {
     const actorRole = this.getMemberRole(group, actorId);
     if (!actorRole || (actorRole !== "owner" && actorRole !== "manager")) {
       throw new ForbiddenException(
-        "Only the owner or a group manager can remove members",
+        this.msg("group.ONLY_OWNER_OR_MANAGER_REMOVE"),
       );
     }
 
     if (group.owner.toString() === memberId) {
-      throw new ForbiddenException("Cannot remove the group owner");
+      throw new ForbiddenException(this.msg("group.CANNOT_REMOVE_OWNER"));
     }
 
     const targetMember = group.members.find(
       (member) => member.account.toString() === memberId,
     );
     if (!targetMember) {
-      throw new NotFoundException("Group member not found");
+      throw new NotFoundException(this.msg("group.MEMBER_NOT_FOUND"));
     }
 
     if (actorRole === "manager" && targetMember.role !== "member") {
       throw new ForbiddenException(
-        "Group managers can only remove members, not managers",
+        this.msg("group.MANAGER_CAN_ONLY_REMOVE_MEMBER"),
       );
     }
 
@@ -313,7 +318,7 @@ export class GroupService {
     // Use lightweight check first - only verify permission
     const group = await this.findOneLightweight(groupId);
     if (!group) {
-      throw new NotFoundException("Group not found");
+      throw new NotFoundException(this.msg("group.NOT_FOUND"));
     }
 
     // Check membership
@@ -323,9 +328,7 @@ export class GroupService {
         (member) => this.getEntityId(member.account) === userId,
       );
     if (!isMember) {
-      throw new ForbiddenException(
-        "You do not have permission to access this group",
-      );
+      throw new ForbiddenException(this.msg("group.ACCESS_DENIED"));
     }
 
     const normalizedLinks = links
@@ -344,7 +347,7 @@ export class GroupService {
     const newTotal = currentLinkCount + normalizedLinks.length;
     if (newTotal > maxLinksPerGroup) {
       throw new BadRequestException(
-        `Nhóm đã có ${currentLinkCount} liên kết. Giới hạn tối đa là ${maxLinksPerGroup} liên kết/nhóm.`,
+        this.msg("group.MAX_LINKS_REACHED", currentLinkCount, maxLinksPerGroup),
       );
     }
 
@@ -428,7 +431,7 @@ export class GroupService {
     const actorRole = this.getMemberRole(group, userId);
     if (!actorRole || (actorRole !== "owner" && actorRole !== "manager")) {
       throw new ForbiddenException(
-        "Only the owner or a group manager can remove links from the group",
+        this.msg("group.ONLY_OWNER_OR_MANAGER_REMOVE_LINK"),
       );
     }
 

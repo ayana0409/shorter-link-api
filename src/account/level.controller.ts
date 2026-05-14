@@ -22,13 +22,13 @@ export class LevelController {
   constructor(private readonly levelService: LevelService) {}
 
   @Post()
-  @UseGuards(AdminGuard) // Chỉ Admin mới được tạo
+  @UseGuards(AdminGuard) // Only Admin can create
   create(@Body() createLevelDto: CreateLevelDto) {
     return this.levelService.create(createLevelDto);
   }
 
   @Get()
-  @UseGuards(ManagerGuard) // Manager (và Admin) có thể xem danh sách
+  @UseGuards(ManagerGuard) // Manager (and Admin) can view the list
   async findAll(
     @Query("search") search?: string,
     @Query("sortBy") sortBy = "name",
@@ -50,19 +50,19 @@ export class LevelController {
   }
 
   @Get(":id")
-  @UseGuards(AdminGuard) // Chỉ Admin mới được xem chi tiết (nếu bạn muốn vậy)
+  @UseGuards(AdminGuard) // Only Admin can view details
   findOne(@Param("id") id: string) {
     return this.levelService.findOne(id);
   }
 
   @Patch(":id")
-  @UseGuards(AdminGuard) // Chỉ Admin mới được sửa
+  @UseGuards(AdminGuard) // Only Admin can update
   update(@Param("id") id: string, @Body() updateLevelDto: UpdateLevelDto) {
     return this.levelService.update(id, updateLevelDto);
   }
 
   @Delete(":id")
-  @UseGuards(AdminGuard) // Chỉ Admin mới được xóa
+  @UseGuards(AdminGuard) // Only Admin can delete
   remove(@Param("id") id: string) {
     return this.levelService.remove(id);
   }

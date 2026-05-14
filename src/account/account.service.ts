@@ -19,13 +19,22 @@ import {
   paginateModel,
 } from "../common/pagination";
 import { LevelService } from "./level.service";
+import { I18nService } from "../common/i18n";
 
 @Injectable()
 export class AccountService {
   constructor(
     @InjectModel(Account.name) private accountModel: Model<AccountDocument>,
     private levelService: LevelService,
+    private i18n: I18nService,
   ) {}
+
+  /**
+   * Helper to resolve a message using the default locale
+   */
+  private msg(keyPath: string, ...args: any[]): string {
+    return this.i18n.t(this.i18n.defaultLocale, keyPath, ...args);
+  }
 
   async create(
     createAccountDto: CreateAccountDto,
@@ -35,7 +44,7 @@ export class AccountService {
       .exec();
     if (existAccount) {
       throw new BadRequestException(
-        `Account with username ${createAccountDto.username} already exists`,
+        this.msg("account.USERNAME_ALREADY_EXISTS", createAccountDto.username),
       );
     }
     const salt = await bcrypt.genSalt(10);
@@ -103,7 +112,7 @@ export class AccountService {
       .select("-password")
       .exec();
     if (!account) {
-      throw new NotFoundException(`Account with ID ${id} not found`);
+      throw new NotFoundException(this.msg("account.USER_NOT_FOUND", id));
     }
     return account;
   }
@@ -118,12 +127,12 @@ export class AccountService {
       .select("-password")
       .exec();
     if (!account) {
-      throw new NotFoundException(`Account with ID ${id} not found`);
+      throw new NotFoundException(this.msg("account.USER_NOT_FOUND", id));
     }
 
     // Manager can only access user accounts
     if (requesterRole === "manager" && account.role !== AccountRole.USER) {
-      throw new ForbiddenException("You can only access user accounts");
+      throw new ForbiddenException(this.msg("account.ACCESS_DENIED_USER_ONLY"));
     }
 
     return account;
@@ -133,7 +142,7 @@ export class AccountService {
     const account = await this.accountModel.findOne({ username }).exec();
     if (!account) {
       throw new NotFoundException(
-        `Account with username ${username} not found`,
+        this.msg("account.USERNAME_NOT_FOUND", username),
       );
     }
     return account;
@@ -187,7 +196,10 @@ export class AccountService {
         .exec();
       if (existingAccount && existingAccount.id !== id) {
         throw new BadRequestException(
-          `Account with username ${updateAccountDto.username} already exists`,
+          this.msg(
+            "account.USERNAME_ALREADY_EXISTS",
+            updateAccountDto.username,
+          ),
         );
       }
     }
@@ -205,7 +217,7 @@ export class AccountService {
       .select("-password")
       .exec();
     if (!account) {
-      throw new NotFoundException(`Account with ID ${id} not found`);
+      throw new NotFoundException(this.msg("account.USER_NOT_FOUND", id));
     }
     return account;
   }
@@ -217,13 +229,13 @@ export class AccountService {
   ): Promise<Account> {
     // Manager cannot update role
     if (requesterRole === "manager" && updateAccountDto.role) {
-      throw new ForbiddenException("Managers cannot change user roles");
+      throw new ForbiddenException(this.msg("account.CANNOT_CHANGE_ROLE"));
     }
 
     // Get the account to check its role
     const existingAccount = await this.accountModel.findById(id).exec();
     if (!existingAccount) {
-      throw new NotFoundException(`Account with ID ${id} not found`);
+      throw new NotFoundException(this.msg("account.USER_NOT_FOUND", id));
     }
 
     // Manager can only update user accounts
@@ -231,7 +243,7 @@ export class AccountService {
       requesterRole === "manager" &&
       existingAccount.role !== AccountRole.USER
     ) {
-      throw new ForbiddenException("You can only update user accounts");
+      throw new ForbiddenException(this.msg("account.UPDATE_DENIED_USER_ONLY"));
     }
 
     // Call the standard update method
@@ -244,7 +256,7 @@ export class AccountService {
       .select("-password")
       .exec();
     if (!account) {
-      throw new NotFoundException(`Account with ID ${id} not found`);
+      throw new NotFoundException(this.msg("account.USER_NOT_FOUND", id));
     }
     return account;
   }
@@ -252,7 +264,7 @@ export class AccountService {
   async remove(id: string): Promise<Account> {
     const account = await this.accountModel.findByIdAndDelete(id).exec();
     if (!account) {
-      throw new NotFoundException(`Account with ID ${id} not found`);
+      throw new NotFoundException(this.msg("account.USER_NOT_FOUND", id));
     }
     return account;
   }
@@ -272,7 +284,7 @@ export class AccountService {
       .select("-password")
       .exec();
     if (!account) {
-      throw new NotFoundException(`Account with ID ${id} not found`);
+      throw new NotFoundException(this.msg("account.USER_NOT_FOUND", id));
     }
     return account;
   }
@@ -283,7 +295,7 @@ export class AccountService {
       .populate("level")
       .exec();
     if (!account) {
-      throw new NotFoundException(`Account with ID ${userId} not found`);
+      throw new NotFoundException(this.msg("account.USER_NOT_FOUND", userId));
     }
 
     if (
@@ -301,7 +313,7 @@ export class AccountService {
         .exec();
 
       if (!updatedAccount) {
-        throw new NotFoundException(`Account with ID ${userId} not found`);
+        throw new NotFoundException(this.msg("account.USER_NOT_FOUND", userId));
       }
       return updatedAccount;
     }
@@ -313,17 +325,17 @@ export class AccountService {
     password: string,
   ): Promise<boolean> {
     if (!password || !password.trim()) {
-      throw new UnauthorizedException("Password is required");
+      throw new UnauthorizedException(this.msg("account.PASSWORD_REQUIRED"));
     }
 
     const account = await this.accountModel.findById(userId).exec();
     if (!account) {
-      throw new NotFoundException(`Account with ID ${userId} not found`);
+      throw new NotFoundException(this.msg("account.USER_NOT_FOUND", userId));
     }
 
     const isPasswordValid = await bcrypt.compare(password, account.password);
     if (!isPasswordValid) {
-      throw new UnauthorizedException("Invalid password");
+      throw new UnauthorizedException(this.msg("account.INVALID_PASSWORD"));
     }
 
     return true;

@@ -4,14 +4,23 @@ import { Model } from "mongoose";
 import { Config } from "./schemas/config.schema";
 import { ConfigService as NestConfigService } from "@nestjs/config";
 import { UpdateConfigDto } from "./dto/update-config.dto";
+import { I18nService } from "../common/i18n";
 
 @Injectable()
 export class ConfigManagerService {
   constructor(
     @InjectModel(Config.name) private configModel: Model<Config>,
     private configService: NestConfigService,
+    private i18n: I18nService,
   ) {
     this.initializeDefaultConfigs();
+  }
+
+  /**
+   * Helper to resolve a message using the default locale
+   */
+  private msg(keyPath: string, ...args: any[]): string {
+    return this.i18n.t(this.i18n.defaultLocale, keyPath, ...args);
   }
 
   private async initializeDefaultConfigs() {
@@ -19,13 +28,14 @@ export class ConfigManagerService {
       {
         key: "DAILY_SHORTEN_LIMIT",
         value: this.configService.get<string>("DAILY_SHORTEN_LIMIT", "10"),
-        description: "Số lượt tạo link tối đa mỗi ngày cho người dùng thường",
+        description:
+          "Maximum number of links a regular user can create per day",
         type: "number",
       },
       {
         key: "SHORT_URL_LENGTH",
         value: this.configService.get<string>("SHORT_URL_LENGTH", "6"),
-        description: "Độ dài của URL rút gọn",
+        description: "Length of the shortened URL",
         type: "number",
       },
       {
@@ -34,7 +44,7 @@ export class ConfigManagerService {
           "SHORT_URL_EXPIRATION_DAYS",
           "300",
         ),
-        description: "Thời gian hết hạn của link rút gọn (tính bằng phút)",
+        description: "Expiration time for shortened links (in minutes)",
         type: "number",
       },
       {
@@ -43,38 +53,38 @@ export class ConfigManagerService {
           "MONGO_DB_CONNECTIONSTRING",
           "mongodb://localhost:27017/shorter-link",
         ),
-        description: "Chuỗi kết nối cơ sở dữ liệu MongoDB",
+        description: "MongoDB database connection string",
         type: "string",
         isHidden: true,
       },
       {
         key: "MAX_GROUPS_COUNT",
         value: this.configService.get<string>("MAX_GROUPS_COUNT", "5"),
-        description: "Số nhóm tối đa mà mỗi người dùng có thể tạo",
+        description: "Maximum number of groups each user can create",
         type: "number",
       },
       {
         key: "MAX_MEMBERS_PER_GROUP",
         value: this.configService.get<string>("MAX_MEMBERS_PER_GROUP", "10"),
-        description: "Số thành viên tối đa trong một nhóm",
+        description: "Maximum number of members in a group",
         type: "number",
       },
       {
         key: "MAX_LINKS_PER_GROUP",
         value: this.configService.get<string>("MAX_LINKS_PER_GROUP", "20"),
-        description: "Số link tối đa trong một nhóm",
+        description: "Maximum number of links in a group",
         type: "number",
       },
       {
         key: "RATE_LIMIT_TTL",
         value: this.configService.get<string>("RATE_LIMIT_TTL", "60000"),
-        description: "Thời gian giới hạn rate limit (ms)",
+        description: "Rate limit time window (ms)",
         type: "number",
       },
       {
         key: "RATE_LIMIT_MAX",
         value: this.configService.get<string>("RATE_LIMIT_MAX", "100"),
-        description: "Số request tối đa trong khoảng thời gian rate limit",
+        description: "Maximum number of requests within the rate limit window",
         type: "number",
       },
     ];
@@ -100,11 +110,11 @@ export class ConfigManagerService {
 
     // Fallback to .env
     const envValue = this.configService.get<string>(key);
-    return envValue ?? null; // Chuyển undefined thành null
+    return envValue ?? null; // Convert undefined to null
   }
 
   async updateByKey(key: string, updateConfigDto: UpdateConfigDto) {
-    // Bỏ kiểm tra allowedKeys vì controller đã xử lý
+    // Skip allowedKeys check since the controller already handles it
     return this.configModel
       .findOneAndUpdate({ key }, updateConfigDto, { new: true, upsert: false })
       .exec();

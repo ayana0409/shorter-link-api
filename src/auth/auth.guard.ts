@@ -9,6 +9,7 @@ import { ConfigService } from "@nestjs/config";
 import { JwtService } from "@nestjs/jwt";
 import { Request } from "express";
 import { AccountService } from "../account/account.service";
+import { I18nService } from "../common/i18n";
 
 @Injectable()
 export class AuthGuard implements CanActivate {
@@ -16,7 +17,15 @@ export class AuthGuard implements CanActivate {
     private jwtService: JwtService,
     private configService: ConfigService,
     private accountService: AccountService,
+    private i18n: I18nService,
   ) {}
+
+  /**
+   * Helper to resolve a message using the default locale
+   */
+  private msg(keyPath: string, ...args: any[]): string {
+    return this.i18n.t(this.i18n.defaultLocale, keyPath, ...args);
+  }
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const request = context.switchToHttp().getRequest();
@@ -34,7 +43,7 @@ export class AuthGuard implements CanActivate {
         .catch(() => null);
 
       if (!account || !account.isActive) {
-        throw new ForbiddenException("Tài khoản đã bị khóa vĩnh viễn");
+        throw new ForbiddenException(this.msg("auth.ACCOUNT_LOCKED"));
       }
 
       request["user"] = payload;

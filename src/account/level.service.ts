@@ -9,12 +9,21 @@ import {
   buildSort,
   paginateModel,
 } from "../common/pagination";
+import { I18nService } from "../common/i18n";
 
 @Injectable()
 export class LevelService {
   constructor(
     @InjectModel(Level.name) private levelModel: Model<LevelDocument>,
+    private i18n: I18nService,
   ) {}
+
+  /**
+   * Helper to resolve a message using the default locale
+   */
+  private msg(keyPath: string, ...args: any[]): string {
+    return this.i18n.t(this.i18n.defaultLocale, keyPath, ...args);
+  }
 
   async create(createLevelDto: CreateLevelDto): Promise<Level> {
     const createdLevel = new this.levelModel(createLevelDto);
@@ -50,7 +59,7 @@ export class LevelService {
   async findOne(id: string): Promise<Level> {
     const level = await this.levelModel.findById(id).exec();
     if (!level) {
-      throw new NotFoundException(`Level with ID ${id} not found`);
+      throw new NotFoundException(this.msg("level.NOT_FOUND", id));
     }
     return level;
   }
@@ -60,7 +69,7 @@ export class LevelService {
       .findByIdAndUpdate(id, updateLevelDto, { new: true })
       .exec();
     if (!updatedLevel) {
-      throw new NotFoundException(`Level with ID ${id} not found`);
+      throw new NotFoundException(this.msg("level.NOT_FOUND", id));
     }
     return updatedLevel;
   }
@@ -68,7 +77,7 @@ export class LevelService {
   async remove(id: string): Promise<void> {
     const result = await this.levelModel.findByIdAndDelete(id).exec();
     if (!result) {
-      throw new NotFoundException(`Level with ID ${id} not found`);
+      throw new NotFoundException(this.msg("level.NOT_FOUND", id));
     }
   }
 }

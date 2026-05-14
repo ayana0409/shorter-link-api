@@ -7,12 +7,21 @@ import {
   buildSort,
   paginateModel,
 } from "../common/pagination";
+import { I18nService } from "../common/i18n";
 
 @Injectable()
 export class AuditLogService {
   constructor(
     @InjectModel(AuditLog.name) private auditLogModel: Model<AuditLogDocument>,
+    private i18n: I18nService,
   ) {}
+
+  /**
+   * Helper to resolve a message using the default locale
+   */
+  private msg(keyPath: string, ...args: any[]): string {
+    return this.i18n.t(this.i18n.defaultLocale, keyPath, ...args);
+  }
 
   async createAuditLog(data: Partial<AuditLog>): Promise<AuditLogDocument> {
     const auditLog = new this.auditLogModel(data);
@@ -71,7 +80,7 @@ export class AuditLogService {
     if (from) {
       const fromDate = new Date(from);
       if (Number.isNaN(fromDate.getTime())) {
-        throw new BadRequestException("Invalid from date");
+        throw new BadRequestException(this.msg("auditLog.INVALID_FROM_DATE"));
       }
       createdAtQuery.$gte = fromDate;
     }
@@ -79,7 +88,7 @@ export class AuditLogService {
     if (to) {
       const toDate = new Date(to);
       if (Number.isNaN(toDate.getTime())) {
-        throw new BadRequestException("Invalid to date");
+        throw new BadRequestException(this.msg("auditLog.INVALID_TO_DATE"));
       }
       createdAtQuery.$lte = toDate;
     }

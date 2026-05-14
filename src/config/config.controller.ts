@@ -11,10 +11,21 @@ import { ConfigManagerService } from "./config-manager.service";
 import { AuthGuard } from "../auth/auth.guard";
 import { AdminGuard } from "../auth/admin.guard";
 import { UpdateConfigDto } from "./dto/update-config.dto";
+import { I18nService } from "../common/i18n";
 
 @Controller("config")
 export class ConfigController {
-  constructor(private readonly configManagerService: ConfigManagerService) {}
+  constructor(
+    private readonly configManagerService: ConfigManagerService,
+    private i18n: I18nService,
+  ) {}
+
+  /**
+   * Helper to resolve a message using the default locale
+   */
+  private msg(keyPath: string, ...args: any[]): string {
+    return this.i18n.t(this.i18n.defaultLocale, keyPath, ...args);
+  }
 
   @Get()
   @UseGuards(AuthGuard, AdminGuard)
@@ -27,7 +38,7 @@ export class ConfigController {
   async getConfig(@Param("key") key: string) {
     const value = await this.configManagerService.getByKey(key);
     if (!value) {
-      throw new BadRequestException(`Config key "${key}" not found`);
+      throw new BadRequestException(this.msg("config.KEY_NOT_FOUND", key));
     }
     return { key, value };
   }
@@ -51,7 +62,7 @@ export class ConfigController {
 
     if (!allowedKeys.includes(key)) {
       throw new BadRequestException(
-        `Cannot update config key "${key}". Allowed keys: ${allowedKeys.join(", ")}`,
+        this.msg("config.KEY_NOT_ALLOWED", key, allowedKeys.join(", ")),
       );
     }
 
@@ -60,7 +71,7 @@ export class ConfigController {
       const num = Number(updateConfigDto.value);
       if (isNaN(num)) {
         throw new BadRequestException(
-          `Value must be a valid number for key "${key}"`,
+          this.msg("config.INVALID_NUMBER_VALUE", key),
         );
       }
     }
@@ -71,7 +82,7 @@ export class ConfigController {
     );
 
     if (!updated) {
-      throw new BadRequestException(`Config key "${key}" not found`);
+      throw new BadRequestException(this.msg("config.KEY_NOT_FOUND", key));
     }
 
     return updated;
