@@ -2,12 +2,14 @@ import { Injectable } from "@nestjs/common";
 import { InjectConnection } from "@nestjs/mongoose";
 import { Connection } from "mongoose";
 import { ConfigManagerService } from "./config/config-manager.service";
+import { RedisService } from "./redis";
 
 @Injectable()
 export class AppService {
   constructor(
     @InjectConnection() private readonly connection: Connection,
     private readonly configManager: ConfigManagerService,
+    private readonly redisService: RedisService,
   ) {}
 
   getHello(): string {
@@ -21,6 +23,7 @@ export class AppService {
   async health(): Promise<{
     status: string;
     database: string;
+    redis: { connected: boolean; pendingNotifications: number };
     uptime: number;
     timestamp: string;
     rateLimit: { ttl: number; limit: number };
@@ -47,9 +50,17 @@ export class AppService {
     const usedMB = Math.round((memUsage.heapUsed / 1024 / 1024) * 100) / 100;
     const totalMB = Math.round((memUsage.heapTotal / 1024 / 1024) * 100) / 100;
 
+    const redisConnected = await this.redisService.ping();
+    const pendingNotifications =
+      await this.redisService.getPendingNotificationCount();
+
     return {
-      status: dbStatus === 1 ? "healthy" : "unhealthy",
+      status: dbStatus === 1 && redisConnected ? "healthy" : "unhealthy",
       database: dbStates[dbStatus] || "unknown",
+      redis: {
+        connected: redisConnected,
+        pendingNotifications,
+      },
       uptime: Math.floor(process.uptime()),
       timestamp: new Date().toISOString(),
       rateLimit: {

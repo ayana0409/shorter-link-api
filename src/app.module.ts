@@ -14,6 +14,7 @@ import { ConfigModule as SystemConfigModule } from "./config/config.module";
 import { ConfigManagerService } from "./config/config-manager.service";
 import { ThrottlerModule } from "@nestjs/throttler";
 import { I18nModule } from "./common/i18n";
+import { RedisModule } from "./redis";
 
 @Module({
   imports: [
@@ -48,6 +49,7 @@ import { I18nModule } from "./common/i18n";
     GroupModule,
     SystemConfigModule,
     I18nModule,
+    RedisModule,
   ],
   controllers: [AppController],
   providers: [AppService, LoggingInterceptor, AllExceptionsFilter],

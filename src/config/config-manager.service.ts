@@ -87,6 +87,35 @@ export class ConfigManagerService {
         description: "Maximum number of requests within the rate limit window",
         type: "number",
       },
+      // ─── Redis Connection ─────────────────────────────────────
+      {
+        key: "REDIS_HOST",
+        value: this.configService.get<string>("REDIS_HOST") || "localhost",
+        description: "Redis server host",
+        type: "string",
+        isHidden: true,
+      },
+      {
+        key: "REDIS_PORT",
+        value: this.configService.get<string>("REDIS_PORT") || "6379",
+        description: "Redis server port",
+        type: "number",
+        isHidden: true,
+      },
+      {
+        key: "REDIS_USERNAME",
+        value: this.configService.get<string>("REDIS_USERNAME") || "default",
+        description: "Redis username",
+        type: "string",
+        isHidden: true,
+      },
+      {
+        key: "REDIS_PASSWORD",
+        value: this.configService.get<string>("REDIS_PASSWORD") || "",
+        description: "Redis password",
+        type: "string",
+        isHidden: true,
+      },
     ];
 
     for (const config of defaultConfigs) {
