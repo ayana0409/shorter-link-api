@@ -29,6 +29,31 @@ export class GroupService {
     return this.i18n.t(this.i18n.defaultLocale, keyPath, ...args);
   }
 
+  private isAdminRole(role?: string): boolean {
+    return role === "admin";
+  }
+
+  async findByAccountId(
+    accountId: string,
+    requesterId: string,
+    requesterRole?: string,
+  ): Promise<Group[]> {
+    const accountObjectId = new Types.ObjectId(accountId);
+    const groups = await this.groupModel
+      .find({
+        $or: [
+          { owner: accountObjectId },
+          { "members.account": accountObjectId },
+        ],
+      })
+      .populate("owner", "username fullname")
+      .populate("members.account", "username fullname")
+      .populate("links", "originalUrl shortUrl siteName")
+      .exec();
+
+    return groups;
+  }
+
   async create(
     createGroupDto: CreateGroupDto,
     ownerId: string,
@@ -75,7 +100,7 @@ export class GroupService {
       .exec();
   }
 
-  async findOne(id: string, userId: string): Promise<Group> {
+  async findOne(id: string, userId: string, userRole?: string): Promise<Group> {
     const group = await this.groupModel
       .findById(id)
       .populate("owner", "username fullname")
@@ -87,13 +112,15 @@ export class GroupService {
       throw new NotFoundException(this.msg("group.NOT_FOUND"));
     }
 
-    const isMember =
-      this.getEntityId(group.owner) === userId ||
-      group.members.some(
-        (member) => this.getEntityId(member.account) === userId,
-      );
-    if (!isMember) {
-      throw new ForbiddenException(this.msg("group.ACCESS_DENIED"));
+    if (!this.isAdminRole(userRole)) {
+      const isMember =
+        this.getEntityId(group.owner) === userId ||
+        group.members.some(
+          (member) => this.getEntityId(member.account) === userId,
+        );
+      if (!isMember) {
+        throw new ForbiddenException(this.msg("group.ACCESS_DENIED"));
+      }
     }
 
     return group;
@@ -153,14 +180,19 @@ export class GroupService {
     return updatedGroup!.populate("owner", "username fullname");
   }
 
-  async remove(id: string, userId: string, password?: string): Promise<void> {
-    const group = await this.findOne(id, userId);
+  async remove(
+    id: string,
+    userId: string,
+    userRole?: string,
+    password?: string,
+  ): Promise<void> {
+    const group = await this.findOne(id, userId, userRole);
 
-    if (!this.isOwner(group, userId)) {
+    if (!this.isAdminRole(userRole) && !this.isOwner(group, userId)) {
       throw new ForbiddenException(this.msg("group.ONLY_OWNER_DELETE"));
     }
 
-    if (password) {
+    if (!this.isAdminRole(userRole) && password) {
       await this.accountService.validatePasswordById(userId, password);
     }
 
@@ -267,19 +299,27 @@ export class GroupService {
     return this.findOne(groupId, actorId);
   }
 
-  async getMembers(groupId: string, userId: string): Promise<Group> {
-    return this.findOne(groupId, userId);
+  async getMembers(
+    groupId: string,
+    userId: string,
+    userRole?: string,
+  ): Promise<Group> {
+    return this.findOne(groupId, userId, userRole);
   }
 
   async removeMember(
     groupId: string,
     memberId: string,
     actorId: string,
+    actorRole?: string,
   ): Promise<Group> {
-    const group = await this.findOne(groupId, actorId);
+    const group = await this.findOne(groupId, actorId, actorRole);
 
-    const actorRole = this.getMemberRole(group, actorId);
-    if (!actorRole || (actorRole !== "owner" && actorRole !== "manager")) {
+    const currentRole = this.getMemberRole(group, actorId);
+    if (
+      !this.isAdminRole(actorRole) &&
+      (!currentRole || (currentRole !== "owner" && currentRole !== "manager"))
+    ) {
       throw new ForbiddenException(
         this.msg("group.ONLY_OWNER_OR_MANAGER_REMOVE"),
       );
@@ -296,7 +336,11 @@ export class GroupService {
       throw new NotFoundException(this.msg("group.MEMBER_NOT_FOUND"));
     }
 
-    if (actorRole === "manager" && targetMember.role !== "member") {
+    if (
+      !this.isAdminRole(actorRole) &&
+      currentRole === "manager" &&
+      targetMember.role !== "member"
+    ) {
       throw new ForbiddenException(
         this.msg("group.MANAGER_CAN_ONLY_REMOVE_MEMBER"),
       );
@@ -425,11 +469,15 @@ export class GroupService {
     groupId: string,
     linkId: string,
     userId: string,
+    userRole?: string,
   ): Promise<Group> {
-    const group = await this.findOne(groupId, userId);
+    const group = await this.findOne(groupId, userId, userRole);
 
     const actorRole = this.getMemberRole(group, userId);
-    if (!actorRole || (actorRole !== "owner" && actorRole !== "manager")) {
+    if (
+      !this.isAdminRole(userRole) &&
+      (!actorRole || (actorRole !== "owner" && actorRole !== "manager"))
+    ) {
       throw new ForbiddenException(
         this.msg("group.ONLY_OWNER_OR_MANAGER_REMOVE_LINK"),
       );
@@ -448,6 +496,7 @@ export class GroupService {
   async getLinks(
     groupId: string,
     userId: string,
+    userRole?: string,
     search?: string,
     status?: string,
     sortBy = "createdAt",
@@ -455,7 +504,7 @@ export class GroupService {
     page = 1,
     limit = 5,
   ): Promise<{ data: any[]; page: number; totalPages: number }> {
-    const group = await this.findOne(groupId, userId);
+    const group = await this.findOne(groupId, userId, userRole);
 
     const linkIds = group.links.map((link) => link.toString());
 

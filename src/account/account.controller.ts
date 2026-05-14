@@ -17,12 +17,14 @@ import { AuthGuard } from "../auth/auth.guard";
 import { AdminGuard } from "../auth/admin.guard";
 import { ManagerGuard } from "../auth/manager.guard";
 import { ShortenerService } from "../shortener/shortener.service";
+import { GroupService } from "../group/group.service";
 
 @Controller("account")
 export class AccountController {
   constructor(
     private readonly accountService: AccountService,
     private readonly shortenerService: ShortenerService,
+    private readonly groupService: GroupService,
   ) {}
 
   @Post()
@@ -94,6 +96,13 @@ export class AccountController {
     );
     const totalPages = Math.max(1, Math.ceil(totalLinks / limitNumber));
     return { account, links, page: pageNumber, totalPages };
+  }
+
+  @Get("admin/:id/groups")
+  @UseGuards(AuthGuard, ManagerGuard)
+  async findGroupsByAccount(@Request() req, @Param("id") id: string) {
+    await this.accountService.findOneFiltered(id, req.user?.role);
+    return this.groupService.findByAccountId(id, req.user?._id, req.user?.role);
   }
 
   @Get()

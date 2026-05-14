@@ -10,9 +10,9 @@ import { AccountModule } from "../account/account.module";
 @Module({
   imports: [
     MongooseModule.forFeature([{ name: Group.name, schema: GroupSchema }]),
-    ShortenerModule,
+    forwardRef(() => ShortenerModule),
     forwardRef(() => AuthModule),
-    AccountModule,
+    forwardRef(() => AccountModule),
   ],
   controllers: [GroupController],
   providers: [GroupService],

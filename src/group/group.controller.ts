@@ -47,7 +47,11 @@ export class GroupController {
 
   @Get(":id")
   async findOne(@Param("id") id: string, @Req() req: any) {
-    return this.groupService.findOne(id, this.getRequestUserId(req));
+    return this.groupService.findOne(
+      id,
+      this.getRequestUserId(req),
+      req.user?.role,
+    );
   }
 
   @Put(":id")
@@ -85,6 +89,7 @@ export class GroupController {
     return this.groupService.remove(
       id,
       this.getRequestUserId(req),
+      req.user?.role,
       body?.password,
     );
   }
@@ -105,7 +110,7 @@ export class GroupController {
 
   @Get(":id/members")
   async getMembers(@Param("id") id: string, @Req() req: any) {
-    return this.groupService.getMembers(id, req.user._id);
+    return this.groupService.getMembers(id, req.user._id, req.user?.role);
   }
 
   @Delete(":id/members/:memberId")
@@ -114,7 +119,12 @@ export class GroupController {
     @Param("memberId") memberId: string,
     @Req() req: any,
   ) {
-    return this.groupService.removeMember(id, memberId, req.user._id);
+    return this.groupService.removeMember(
+      id,
+      memberId,
+      req.user._id,
+      req.user?.role,
+    );
   }
 
   @Post(":id/links")
@@ -132,7 +142,12 @@ export class GroupController {
     @Param("linkId") linkId: string,
     @Req() req: any,
   ) {
-    return this.groupService.removeLink(id, linkId, req.user._id);
+    return this.groupService.removeLink(
+      id,
+      linkId,
+      req.user._id,
+      req.user?.role,
+    );
   }
 
   @Get(":id/links")
@@ -151,6 +166,7 @@ export class GroupController {
     return this.groupService.getLinks(
       id,
       req.user._id,
+      req.user?.role,
       search,
       status,
       sortBy,

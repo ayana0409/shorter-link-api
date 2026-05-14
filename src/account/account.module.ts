@@ -7,6 +7,7 @@ import { MongooseModule } from "@nestjs/mongoose/dist/mongoose.module";
 import { AuthModule } from "../auth/auth.module";
 import { ShortenerModule } from "../shortener/shortener.module";
 import { LevelModule } from "./level.module";
+import { GroupModule } from "../group/group.module";
 
 @Module({
   imports: [
@@ -17,6 +18,7 @@ import { LevelModule } from "./level.module";
     forwardRef(() => AuthModule),
     forwardRef(() => ShortenerModule),
     forwardRef(() => LevelModule),
+    forwardRef(() => GroupModule),
   ],
   controllers: [AccountController],
   providers: [AccountService],
