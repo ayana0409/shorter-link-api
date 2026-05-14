@@ -20,13 +20,18 @@ import {
 } from "../common/pagination";
 import { LevelService } from "./level.service";
 import { I18nService } from "../common/i18n";
+import { RedisService } from "../redis";
+import { ModuleRef } from "@nestjs/core";
 
 @Injectable()
 export class AccountService {
+  private redisCache: RedisService | null = null;
+
   constructor(
     @InjectModel(Account.name) private accountModel: Model<AccountDocument>,
     private levelService: LevelService,
     private i18n: I18nService,
+    private moduleRef: ModuleRef,
   ) {}
 
   /**
@@ -34,6 +39,28 @@ export class AccountService {
    */
   private msg(keyPath: string, ...args: any[]): string {
     return this.i18n.t(this.i18n.defaultLocale, keyPath, ...args);
+  }
+
+  private get redis(): RedisService | null {
+    if (!this.redisCache) {
+      try {
+        this.redisCache = this.moduleRef.get(RedisService, { strict: false });
+      } catch {
+        return null;
+      }
+    }
+    return this.redisCache;
+  }
+
+  private async execRedis(
+    fn: (redis: RedisService) => Promise<any>,
+  ): Promise<void> {
+    if (!this.redis) return;
+    try {
+      await fn(this.redis);
+    } catch {
+      // ignore Redis failures
+    }
   }
 
   async create(
@@ -219,6 +246,10 @@ export class AccountService {
     if (!account) {
       throw new NotFoundException(this.msg("account.USER_NOT_FOUND", id));
     }
+
+    // Invalidate user permissions cache (level/permissions may have changed)
+    await this.execRedis((redis) => redis.invalidateUserPermissions(id));
+
     return account;
   }
 
@@ -266,6 +297,8 @@ export class AccountService {
     if (!account) {
       throw new NotFoundException(this.msg("account.USER_NOT_FOUND", id));
     }
+    // Invalidate user permissions cache
+    await this.execRedis((redis) => redis.invalidateUserPermissions(id));
     return account;
   }
 
@@ -286,6 +319,8 @@ export class AccountService {
     if (!account) {
       throw new NotFoundException(this.msg("account.USER_NOT_FOUND", id));
     }
+    // Invalidate user permissions cache (level changed)
+    await this.execRedis((redis) => redis.invalidateUserPermissions(id));
     return account;
   }
 

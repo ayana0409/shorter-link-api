@@ -566,6 +566,13 @@ export class RedisService {
     return this.del(`${this.USER_PERM_PREFIX}${userId}`);
   }
 
+  async invalidateAllUserPermissions(): Promise<void> {
+    const keys = await this.keys(`${this.USER_PERM_PREFIX}*`);
+    if (keys.length > 0) {
+      await this.delMany(...keys);
+    }
+  }
+
   // ─── Daily Counter (High-Level) ──────────────────────────
 
   private readonly DAILY_COUNT_PREFIX = "daily_count:";
@@ -609,5 +616,67 @@ export class RedisService {
       await this.set(key, value, options);
     }
     return value;
+  }
+
+  // ─── Cache Statistics ────────────────────────────────────
+
+  /**
+   * Get cache statistics: key counts per category and estimated memory
+   */
+  async getCacheStats(): Promise<{
+    shortUrl: { count: number; keys: string[] };
+    userPermissions: { count: number; keys: string[] };
+    dailyCount: { count: number; keys: string[] };
+    config: { count: number; keys: string[] };
+    totalKeys: number;
+    estimatedMemoryBytes: number;
+  }> {
+    const shortUrlKeys = await this.keys(`${this.SHORT_URL_PREFIX}*`);
+    const userPermKeys = await this.keys(`${this.USER_PERM_PREFIX}*`);
+    const dailyCountKeys = await this.keys(`${this.DAILY_COUNT_PREFIX}*`);
+    const configKeys = await this.keys(`${this.CONFIG_PREFIX}*`);
+
+    const allKeys = [
+      ...shortUrlKeys,
+      ...userPermKeys,
+      ...dailyCountKeys,
+      ...configKeys,
+    ];
+
+    // Estimate memory by sampling key sizes (serialized JSON length)
+    let estimatedMemoryBytes = 0;
+    const sampleSize = Math.min(allKeys.length, 50);
+    if (sampleSize > 0) {
+      const step = Math.max(1, Math.floor(allKeys.length / sampleSize));
+      let sampledCount = 0;
+      for (let i = 0; i < allKeys.length; i += step) {
+        try {
+          const val = await this.client.get(allKeys[i]);
+          if (val) {
+            estimatedMemoryBytes += Buffer.byteLength(val, "utf8");
+          }
+          // Also count the key itself
+          estimatedMemoryBytes += Buffer.byteLength(allKeys[i], "utf8");
+          sampledCount++;
+        } catch {
+          // ignore
+        }
+      }
+      // Extrapolate to full set
+      if (sampledCount > 0) {
+        estimatedMemoryBytes = Math.round(
+          (estimatedMemoryBytes / sampledCount) * allKeys.length,
+        );
+      }
+    }
+
+    return {
+      shortUrl: { count: shortUrlKeys.length, keys: shortUrlKeys },
+      userPermissions: { count: userPermKeys.length, keys: userPermKeys },
+      dailyCount: { count: dailyCountKeys.length, keys: dailyCountKeys },
+      config: { count: configKeys.length, keys: configKeys },
+      totalKeys: allKeys.length,
+      estimatedMemoryBytes,
+    };
   }
 }

@@ -1,19 +1,38 @@
-import { Injectable } from "@nestjs/common";
+import { Injectable, OnModuleInit } from "@nestjs/common";
 import { InjectModel } from "@nestjs/mongoose/dist";
 import { Model } from "mongoose";
 import { Config } from "./schemas/config.schema";
 import { ConfigService as NestConfigService } from "@nestjs/config";
 import { UpdateConfigDto } from "./dto/update-config.dto";
 import { I18nService } from "../common/i18n";
+import { RedisService } from "../redis";
+import { ModuleRef } from "@nestjs/core";
 
 @Injectable()
-export class ConfigManagerService {
+export class ConfigManagerService implements OnModuleInit {
+  private redisCache: RedisService | null = null;
+
   constructor(
     @InjectModel(Config.name) private configModel: Model<Config>,
     private configService: NestConfigService,
     private i18n: I18nService,
-  ) {
-    this.initializeDefaultConfigs();
+    private moduleRef: ModuleRef,
+  ) {}
+
+  async onModuleInit() {
+    await this.initializeDefaultConfigs();
+    await this.warmUpCache();
+  }
+
+  private get redis(): RedisService | null {
+    if (!this.redisCache) {
+      try {
+        this.redisCache = this.moduleRef.get(RedisService, { strict: false });
+      } catch {
+        return null;
+      }
+    }
+    return this.redisCache;
   }
 
   /**
@@ -21,6 +40,19 @@ export class ConfigManagerService {
    */
   private msg(keyPath: string, ...args: any[]): string {
     return this.i18n.t(this.i18n.defaultLocale, keyPath, ...args);
+  }
+
+  /** Warm up: load all DB config into Redis cache */
+  private async warmUpCache(): Promise<void> {
+    if (!this.redis) return;
+    try {
+      const allConfigs = await this.configModel.find().lean().exec();
+      for (const cfg of allConfigs) {
+        await this.redis.cacheConfig(cfg.key, cfg.value);
+      }
+    } catch {
+      // ignore cache warm-up errors
+    }
   }
 
   private async initializeDefaultConfigs() {
@@ -131,22 +163,53 @@ export class ConfigManagerService {
   }
 
   async getByKey(key: string): Promise<string | null> {
-    // Try to get from DB first
+    // Try Redis cache first
+    if (this.redis) {
+      try {
+        const cached = await this.redis.getCachedConfig(key);
+        if (cached !== null && cached !== undefined) {
+          return cached;
+        }
+      } catch {
+        // ignore cache read errors, fall through to DB
+      }
+    }
+
+    // Try to get from DB
     const config = await this.configModel.findOne({ key }).exec();
     if (config) {
+      // Populate cache for next read
+      if (this.redis) {
+        try {
+          await this.redis.cacheConfig(key, config.value);
+        } catch {
+          // ignore cache write errors
+        }
+      }
       return config.value;
     }
 
     // Fallback to .env
     const envValue = this.configService.get<string>(key);
-    return envValue ?? null; // Convert undefined to null
+    return envValue ?? null;
   }
 
   async updateByKey(key: string, updateConfigDto: UpdateConfigDto) {
-    // Skip allowedKeys check since the controller already handles it
-    return this.configModel
+    const result = await this.configModel
       .findOneAndUpdate({ key }, updateConfigDto, { new: true, upsert: false })
       .exec();
+
+    // Invalidate + re-populate cache
+    if (result && this.redis) {
+      try {
+        await this.redis.invalidateConfig(key);
+        await this.redis.cacheConfig(key, result.value);
+      } catch {
+        // ignore cache errors
+      }
+    }
+
+    return result;
   }
 
   async getValue(key: string, defaultValue?: string): Promise<string> {

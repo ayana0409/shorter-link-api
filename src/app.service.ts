@@ -23,7 +23,18 @@ export class AppService {
   async health(): Promise<{
     status: string;
     database: string;
-    redis: { connected: boolean; pendingNotifications: number };
+    redis: {
+      connected: boolean;
+      pendingNotifications: number;
+      cache: {
+        totalKeys: number;
+        estimatedMemoryKB: number;
+        shortUrl: { count: number };
+        userPermissions: { count: number };
+        dailyCount: { count: number };
+        config: { count: number };
+      };
+    };
     uptime: number;
     timestamp: string;
     rateLimit: { ttl: number; limit: number };
@@ -54,12 +65,39 @@ export class AppService {
     const pendingNotifications =
       await this.redisService.getPendingNotificationCount();
 
+    // Cache stats (only if Redis is connected)
+    let cacheStats = {
+      totalKeys: 0,
+      estimatedMemoryKB: 0,
+      shortUrl: { count: 0 },
+      userPermissions: { count: 0 },
+      dailyCount: { count: 0 },
+      config: { count: 0 },
+    };
+
+    if (redisConnected) {
+      try {
+        const stats = await this.redisService.getCacheStats();
+        cacheStats = {
+          totalKeys: stats.totalKeys,
+          estimatedMemoryKB: Math.round(stats.estimatedMemoryBytes / 1024),
+          shortUrl: { count: stats.shortUrl.count },
+          userPermissions: { count: stats.userPermissions.count },
+          dailyCount: { count: stats.dailyCount.count },
+          config: { count: stats.config.count },
+        };
+      } catch {
+        // ignore cache stats errors
+      }
+    }
+
     return {
       status: dbStatus === 1 && redisConnected ? "healthy" : "unhealthy",
       database: dbStates[dbStatus] || "unknown",
       redis: {
         connected: redisConnected,
         pendingNotifications,
+        cache: cacheStats,
       },
       uptime: Math.floor(process.uptime()),
       timestamp: new Date().toISOString(),

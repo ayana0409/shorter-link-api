@@ -17,21 +17,49 @@ import * as he from "he";
 import { ConfigManagerService } from "../config/config-manager.service";
 import { I18nService } from "../common/i18n";
 import { AccountService } from "../account/account.service";
+import { RedisService } from "../redis";
+import { ModuleRef as NestModuleRef } from "@nestjs/core";
 dotenv.config();
 
 @Injectable()
 export class ShortenerService {
+  private redisCache: RedisService | null = null;
+
   constructor(
     @InjectModel(Shortener.name) private shortenerModel: Model<Shortener>,
     private configService: ConfigService,
     private configManagerService: ConfigManagerService,
     private accountService: AccountService,
     private i18n: I18nService,
+    private moduleRef: NestModuleRef,
   ) {}
+
+  private get redis(): RedisService | null {
+    if (!this.redisCache) {
+      try {
+        this.redisCache = this.moduleRef.get(RedisService, { strict: false });
+      } catch {
+        return null;
+      }
+    }
+    return this.redisCache;
+  }
 
   /** Resolve a message using the default locale */
   private msg(keyPath: string, ...args: any[]): string {
     return this.i18n.t(this.i18n.defaultLocale, keyPath, ...args);
+  }
+
+  private async withRedis<T>(
+    fn: (redis: RedisService) => Promise<T>,
+    fallback: T,
+  ): Promise<T> {
+    if (!this.redis) return fallback;
+    try {
+      return await fn(this.redis);
+    } catch {
+      return fallback;
+    }
   }
 
   async create(createShortenerDto: CreateShortenerDto) {
@@ -97,6 +125,15 @@ export class ShortenerService {
     });
 
     const saved = await shortener.save();
+
+    // Invalidate daily count cache for this user
+    if (userId && this.redis) {
+      try {
+        await this.redis.del(`daily_count:${userId}:${this.todayKey()}`);
+      } catch {
+        /* ignore */
+      }
+    }
 
     if (!createShortenerDto.siteName) {
       this.fetchPageTitle(originalUrl)
@@ -277,6 +314,48 @@ export class ShortenerService {
     return this.shortenerModel.countDocuments(query).exec();
   }
 
+  /**
+   * Get cached user permissions (level info) — shared across all permission checks
+   */
+  private async getUserPermissions(userId: string) {
+    const cacheKey = `user:perm:${userId}`;
+    const cached = await this.withRedis<any | null>(
+      (redis) => redis.getCachedUserPermissions(cacheKey),
+      null,
+    );
+    if (cached) return cached;
+
+    const account = await this.accountService.findOne(userId);
+    const permissions = {
+      dailyShortenLimit: 10,
+      allowPassword: false,
+      allowCustomExpiration: false,
+      maxGroupsCount: 5,
+      maxMembersPerGroup: 10,
+      maxLinksPerGroup: 20,
+    };
+
+    if (
+      account.level &&
+      (!account.levelExpirationDate || account.levelExpirationDate > new Date())
+    ) {
+      permissions.dailyShortenLimit = account.level.dailyShortenLimit ?? 10;
+      permissions.allowPassword = account.level.allowPassword ?? false;
+      permissions.allowCustomExpiration =
+        account.level.allowCustomExpiration ?? false;
+      permissions.maxGroupsCount = account.level.maxGroupsCount ?? 5;
+      permissions.maxMembersPerGroup = account.level.maxMembersPerGroup ?? 10;
+      permissions.maxLinksPerGroup = account.level.maxLinksPerGroup ?? 20;
+    }
+
+    // Cache for 5 minutes
+    await this.withRedis(
+      (redis) => redis.cacheUserPermissions(cacheKey, permissions),
+      false,
+    );
+    return permissions;
+  }
+
   async getDailyShortenerLimit(userId?: string): Promise<number> {
     if (!userId) {
       return this.configManagerService.getNumberValue(
@@ -284,65 +363,28 @@ export class ShortenerService {
         10,
       );
     }
-
-    const account = await this.accountService.findOne(userId);
-    if (
-      account.level &&
-      (!account.levelExpirationDate || account.levelExpirationDate > new Date())
-    ) {
-      return account.level.dailyShortenLimit;
-    }
-
-    return this.configManagerService.getNumberValue("DAILY_SHORTEN_LIMIT", 10);
+    const perms = await this.getUserPermissions(userId);
+    return perms.dailyShortenLimit;
   }
 
   async canUsePassword(userId?: string): Promise<boolean> {
     if (!userId) return false;
-
-    const account = await this.accountService.findOne(userId);
-    if (
-      account.level &&
-      (!account.levelExpirationDate || account.levelExpirationDate > new Date())
-    ) {
-      return account.level.allowPassword;
-    }
-
-    return false;
+    const perms = await this.getUserPermissions(userId);
+    return perms.allowPassword;
   }
 
   async canUseCustomExpiration(userId?: string): Promise<boolean> {
     if (!userId) return false;
-
-    const account = await this.accountService.findOne(userId);
-    if (
-      account.level &&
-      (!account.levelExpirationDate || account.levelExpirationDate > new Date())
-    ) {
-      return account.level.allowCustomExpiration;
-    }
-
-    return false;
+    const perms = await this.getUserPermissions(userId);
+    return perms.allowCustomExpiration;
   }
 
   async getMaxGroupsCount(userId?: string): Promise<number> {
     if (!userId) {
       return this.configManagerService.getNumberValue("MAX_GROUPS_COUNT", 5);
     }
-
-    const account = await this.accountService.findOne(userId);
-    if (
-      account.level &&
-      (!account.levelExpirationDate || account.levelExpirationDate > new Date())
-    ) {
-      if (
-        account.level.maxGroupsCount !== undefined &&
-        account.level.maxGroupsCount !== null
-      ) {
-        return account.level.maxGroupsCount;
-      }
-    }
-
-    return this.configManagerService.getNumberValue("MAX_GROUPS_COUNT", 5);
+    const perms = await this.getUserPermissions(userId);
+    return perms.maxGroupsCount;
   }
 
   async getMaxMembersPerGroup(userId?: string): Promise<number> {
@@ -352,24 +394,8 @@ export class ShortenerService {
         10,
       );
     }
-
-    const account = await this.accountService.findOne(userId);
-    if (
-      account.level &&
-      (!account.levelExpirationDate || account.levelExpirationDate > new Date())
-    ) {
-      if (
-        account.level.maxMembersPerGroup !== undefined &&
-        account.level.maxMembersPerGroup !== null
-      ) {
-        return account.level.maxMembersPerGroup;
-      }
-    }
-
-    return this.configManagerService.getNumberValue(
-      "MAX_MEMBERS_PER_GROUP",
-      10,
-    );
+    const perms = await this.getUserPermissions(userId);
+    return perms.maxMembersPerGroup;
   }
 
   async getMaxLinksPerGroup(userId?: string): Promise<number> {
@@ -379,36 +405,45 @@ export class ShortenerService {
         20,
       );
     }
-
-    const account = await this.accountService.findOne(userId);
-    if (
-      account.level &&
-      (!account.levelExpirationDate || account.levelExpirationDate > new Date())
-    ) {
-      if (
-        account.level.maxLinksPerGroup !== undefined &&
-        account.level.maxLinksPerGroup !== null
-      ) {
-        return account.level.maxLinksPerGroup;
-      }
-    }
-
-    return this.configManagerService.getNumberValue("MAX_LINKS_PER_GROUP", 20);
+    const perms = await this.getUserPermissions(userId);
+    return perms.maxLinksPerGroup;
   }
 
   async countDailyCreatedByUser(userId: string): Promise<number> {
     if (!userId) {
       return 0;
     }
+
+    // Try cache first
+    const todayKey = this.todayKey();
+    const dailyCacheKey = `daily_count:${userId}:${todayKey}`;
+    const cached = await this.withRedis<number | null>(
+      (redis) => redis.get<number>(dailyCacheKey),
+      null,
+    );
+    if (cached !== null && cached !== undefined) return cached;
+
     const startOfToday = new Date();
     startOfToday.setHours(0, 0, 0, 0);
 
-    return this.shortenerModel
+    const count = await this.shortenerModel
       .countDocuments({
         userId,
         createdAt: { $gte: startOfToday },
       })
       .exec();
+
+    // Cache with TTL until midnight
+    const now = new Date();
+    const midnight = new Date(now);
+    midnight.setHours(24, 0, 0, 0);
+    const ttlSeconds = Math.floor((midnight.getTime() - now.getTime()) / 1000);
+    await this.withRedis(
+      (redis) => redis.set(dailyCacheKey, count, { ttl: ttlSeconds }),
+      false,
+    );
+
+    return count;
   }
 
   async verifyDailyLimit(userId: string, needed: number = 1) {
@@ -498,6 +533,16 @@ export class ShortenerService {
   }
 
   async findByShortUrl(shortUrl: string) {
+    // Try cache first
+    if (this.redis) {
+      try {
+        const cached = await this.redis.getCachedShortUrl(shortUrl);
+        if (cached) return cached;
+      } catch {
+        /* ignore */
+      }
+    }
+
     const doc = await this.shortenerModel
       .findOne({
         shortUrl,
@@ -509,10 +554,29 @@ export class ShortenerService {
       .exec();
     if (!doc) return null;
     const { password, ...result } = doc;
-    return {
+    const response = {
       ...result,
       passwordProtected: Boolean(password),
     };
+
+    // Cache with TTL based on expiration (min 60s, max 1h for no-expiration links)
+    if (this.redis) {
+      try {
+        const ttl = doc.expiresAt
+          ? Math.max(
+              Math.floor(
+                (new Date(doc.expiresAt).getTime() - Date.now()) / 1000,
+              ),
+              60,
+            )
+          : 3600;
+        await this.redis.cacheShortUrl(shortUrl, response, ttl);
+      } catch {
+        /* ignore */
+      }
+    }
+
+    return response;
   }
 
   private extractShortUrlCode(shortUrl: string): string {
@@ -716,13 +780,42 @@ export class ShortenerService {
         await bcrypt.genSalt(10),
       );
     }
-    return this.shortenerModel
+    const updated = await this.shortenerModel
       .findByIdAndUpdate(id, updateShortenerDto, { new: true })
+      .lean()
       .exec();
+
+    // Invalidate short URL cache
+    if (updated?.shortUrl) {
+      await this.withRedis(
+        (redis) => redis.invalidateShortUrl(updated.shortUrl),
+        false,
+      );
+    }
+
+    return updated;
   }
 
   async remove(id: string) {
-    return this.shortenerModel.findByIdAndDelete(id).exec();
+    const doc = await this.shortenerModel.findById(id).lean().exec();
+    const result = await this.shortenerModel.findByIdAndDelete(id).exec();
+
+    // Invalidate short URL cache
+    if (doc?.shortUrl) {
+      await this.withRedis(
+        (redis) => redis.invalidateShortUrl(doc.shortUrl),
+        false,
+      );
+    }
+    // Invalidate daily count cache
+    if (doc?.userId) {
+      await this.withRedis(
+        (redis) => redis.del(`daily_count:${doc.userId}:${this.todayKey()}`),
+        false,
+      );
+    }
+
+    return result;
   }
 
   async generateUniqueShortUrl(length: number): Promise<string> {
@@ -786,5 +879,9 @@ export class ShortenerService {
     }
 
     return shortUrl;
+  }
+
+  private todayKey(): string {
+    return new Date().toISOString().split("T")[0]; // YYYY-MM-DD
   }
 }

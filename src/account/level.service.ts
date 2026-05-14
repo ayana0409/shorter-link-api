@@ -10,12 +10,17 @@ import {
   paginateModel,
 } from "../common/pagination";
 import { I18nService } from "../common/i18n";
+import { RedisService } from "../redis";
+import { ModuleRef } from "@nestjs/core";
 
 @Injectable()
 export class LevelService {
+  private redisCache: RedisService | null = null;
+
   constructor(
     @InjectModel(Level.name) private levelModel: Model<LevelDocument>,
     private i18n: I18nService,
+    private moduleRef: ModuleRef,
   ) {}
 
   /**
@@ -23,6 +28,28 @@ export class LevelService {
    */
   private msg(keyPath: string, ...args: any[]): string {
     return this.i18n.t(this.i18n.defaultLocale, keyPath, ...args);
+  }
+
+  private get redis(): RedisService | null {
+    if (!this.redisCache) {
+      try {
+        this.redisCache = this.moduleRef.get(RedisService, { strict: false });
+      } catch {
+        return null;
+      }
+    }
+    return this.redisCache;
+  }
+
+  private async execRedis(
+    fn: (redis: RedisService) => Promise<void>,
+  ): Promise<void> {
+    if (!this.redis) return;
+    try {
+      await fn(this.redis);
+    } catch {
+      // ignore Redis failures
+    }
   }
 
   async create(createLevelDto: CreateLevelDto): Promise<Level> {
@@ -71,6 +98,8 @@ export class LevelService {
     if (!updatedLevel) {
       throw new NotFoundException(this.msg("level.NOT_FOUND", id));
     }
+    // Invalidate all user permissions cache (level permissions changed)
+    await this.execRedis((redis) => redis.invalidateAllUserPermissions());
     return updatedLevel;
   }
 
@@ -79,5 +108,7 @@ export class LevelService {
     if (!result) {
       throw new NotFoundException(this.msg("level.NOT_FOUND", id));
     }
+    // Invalidate all user permissions cache (level permissions changed)
+    await this.execRedis((redis) => redis.invalidateAllUserPermissions());
   }
 }
