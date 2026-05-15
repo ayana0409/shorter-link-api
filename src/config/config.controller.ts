@@ -56,8 +56,13 @@ export class ConfigController {
       "MONGO_DB_CONNECTIONSTRING",
       "MAX_GROUPS_COUNT",
       "MAX_MEMBERS_PER_GROUP",
+      "MAX_LINKS_PER_GROUP",
       "RATE_LIMIT_TTL",
       "RATE_LIMIT_MAX",
+      "REDIS_HOST",
+      "REDIS_PORT",
+      "REDIS_USERNAME",
+      "REDIS_PASSWORD",
     ];
 
     if (!allowedKeys.includes(key)) {
