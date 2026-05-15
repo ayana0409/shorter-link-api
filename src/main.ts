@@ -7,6 +7,8 @@ import { LoggingInterceptor } from "./common/interceptors/logging.interceptor";
 import helmet from "helmet";
 
 async function bootstrap() {
+  // Start NestJS app — MongoDB connection with infinite retry
+  // is handled inside MongooseModule.forRootAsync in AppModule
   const app = await NestFactory.create(AppModule);
 
   // Security headers
