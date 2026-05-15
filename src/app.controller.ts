@@ -1,5 +1,6 @@
-import { Controller, Get } from "@nestjs/common";
+import { Controller, Get, Post, Body, Req, Res } from "@nestjs/common";
 import { AppService } from "./app.service";
+import { Response } from "express";
 
 @Controller()
 export class AppController {
@@ -18,5 +19,14 @@ export class AppController {
   @Get("health")
   health() {
     return this.appService.health();
+  }
+
+  @Post("admin/redis/flush")
+  async flushCacheEndpoint(@Res() res: Response) {
+    const success = await this.appService.flushCache();
+    if (success) {
+      return res.json({ status: "ok", message: "Cache flushed successfully" });
+    }
+    return res.status(500).json({ status: "error", message: "Flush failed" });
   }
 }

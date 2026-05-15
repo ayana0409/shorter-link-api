@@ -454,24 +454,7 @@ export class RedisService {
     return listCount + dedupKeys.length;
   }
 
-  /**
-   * Get notification queue details for health checks
-   */
-  async getPendingNotificationQueueStats(): Promise<{
-    listCount: number;
-    dedupKeyCount: number;
-    total: number;
-  }> {
-    const listCount = await this.client.lLen(this.NOTIFICATION_QUEUE_KEY);
-    const dedupKeys = await this.keys(
-      `${this.NOTIFICATION_DEDUP_QUEUE_PREFIX}*`,
-    );
-    return {
-      listCount,
-      dedupKeyCount: dedupKeys.length,
-      total: listCount + dedupKeys.length,
-    };
-  }
+
 
   /**
    * Get notification status
@@ -701,6 +684,38 @@ export class RedisService {
       config: { count: configKeys.length, keys: configKeys },
       totalKeys: allKeys.length,
       estimatedMemoryBytes,
+    };
+  }
+
+  // ─── Admin: Flush Cache ─────────────────────────────────────────────
+
+  async flushCache(): Promise<boolean> {
+    try {
+      await this.client.flushDb();
+      await this.client.del(this.NOTIFICATION_QUEUE_KEY);
+      await this.client.del(this.NOTIFICATION_DEDUP_QUEUE_PREFIX + '*');
+      await this.cleanupNotificationStatus(0);
+      this.logger.log('Redis cache and notification queue flushed');
+      return true;
+    } catch (err: any) {
+      this.logger.error('Flush cache error:', err);
+      return false;
+    }
+  }
+
+  // ─── Admin: Get pending notification queue stats ─────────────────────
+
+  async getPendingNotificationQueueStats(): Promise<{
+    listCount: number;
+    dedupKeyCount: number;
+    total: number;
+  }> {
+    const listCount = await this.client.lLen(this.NOTIFICATION_QUEUE_KEY);
+    const dedupKeys = await this.keys(`${this.NOTIFICATION_DEDUP_QUEUE_PREFIX}*`);
+    return {
+      listCount,
+      dedupKeyCount: dedupKeys.length,
+      total: listCount + dedupKeys.length,
     };
   }
 }

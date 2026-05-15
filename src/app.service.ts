@@ -134,4 +134,14 @@ export class AppService {
       },
     };
   }
+
+  async flushCache(): Promise<boolean> {
+    try {
+      await this.redisService.flushCache();
+      return true;
+    } catch (error) {
+      console.error("Failed to flush cache:", error);
+      return false;
+    }
+  }
 }
