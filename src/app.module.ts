@@ -16,6 +16,7 @@ import { ThrottlerModule } from "@nestjs/throttler";
 import { I18nModule } from "./common/i18n";
 import { RedisModule } from "./redis";
 import { DatabaseModule } from "./database/database.module";
+import { NotificationModule } from "./notification";
 import * as mongoose from "mongoose";
 
 const MONGO_RETRY_DELAY_MS = 5000;
@@ -86,6 +87,7 @@ async function connectMongoWithRetry(uri: string): Promise<void> {
     SystemConfigModule,
     I18nModule,
     RedisModule,
+    NotificationModule,
   ],
   controllers: [AppController],
   providers: [AppService, LoggingInterceptor, AllExceptionsFilter],

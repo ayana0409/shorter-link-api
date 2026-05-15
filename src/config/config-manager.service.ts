@@ -119,6 +119,15 @@ export class ConfigManagerService implements OnModuleInit {
         description: "Maximum number of requests within the rate limit window",
         type: "number",
       },
+      // ─── WebSocket ───────────────────────────────────────────
+      {
+        key: "WS_URL",
+        value:
+          this.configService.get<string>("WS_URL") || "http://localhost:3002",
+        description: "WebSocket server URL for notifications",
+        type: "string",
+        isHidden: true,
+      },
       // ─── Redis Connection ─────────────────────────────────────
       {
         key: "REDIS_HOST",
