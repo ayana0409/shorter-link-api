@@ -31,28 +31,37 @@ export class NotificationService implements OnModuleInit {
     } catch {
       this.wsBaseUrl = "http://localhost:3002";
     }
-    // Start background drain loop — process queued notifications every 5s
-    this.drainInterval = setInterval(() => this.drainQueue(), 5000);
+    this.drainInterval = setInterval(() => this.drainQueue(), 10000);
     this.logger.log(`NotificationService initialized (WS: ${this.wsBaseUrl})`);
   }
 
   /**
-   * Send a notification: persist to DB, push to Redis queue, attempt WebSocket delivery
+   * Send a notification:
+   * 1. Persist to DB (status: pending)
+   * 2. Try immediate WebSocket delivery
+   * 3. If WebSocket fails → push to Redis queue for retry
    */
   async send(
     userId: string,
     event: string,
     payload: Record<string, any>,
+    username?: string,
   ): Promise<Notification> {
-    // 1. Persist to MongoDB
     const notification = await this.notificationModel.create({
-      userId: new Types.ObjectId(userId),
+      userId,
+      username: username || null,
       event,
       payload,
       status: NotificationStatus.PENDING,
     });
 
-    // 2. Push to Redis queue for guaranteed delivery
+    const delivered = await this.tryDeliver(userId, event, payload);
+    if (delivered) {
+      await this.markDelivered(notification._id);
+      return notification;
+    }
+
+    // WebSocket unavailable → queue for retry
     await this.redisService.enqueueNotification({
       type: "notification",
       payload: {
@@ -63,19 +72,13 @@ export class NotificationService implements OnModuleInit {
       },
       targetUserId: userId,
     });
-
-    // 3. Attempt immediate WebSocket delivery
-    const delivered = await this.tryDeliverViaWebSocket(userId, event, payload);
-    if (delivered) {
-      await this.markDelivered(notification._id);
-    }
+    this.logger.debug(
+      `Notification ${notification._id} queued for user ${userId}`,
+    );
 
     return notification;
   }
 
-  /**
-   * Send notification to multiple users
-   */
   async sendToMany(
     userIds: string[],
     event: string,
@@ -89,61 +92,65 @@ export class NotificationService implements OnModuleInit {
     return notifications;
   }
 
-  /**
-   * Broadcast to all connected users via WebSocket
-   */
   async broadcast(event: string, payload: Record<string, any>): Promise<void> {
     try {
-      await axios.post(`${this.wsBaseUrl}/notify/broadcast`, {
-        event,
-        payload,
-      });
+      await axios.post(
+        `${this.wsBaseUrl}/notify/broadcast`,
+        { event, payload },
+        { timeout: 3000 },
+      );
     } catch (err: any) {
       this.logger.warn(`Broadcast failed: ${err.message}`);
     }
   }
 
   /**
-   * Get pending notifications for a user
+   * Get pending notifications — userId can be ObjectId string or username
    */
   async getPendingForUser(userId: string): Promise<Notification[]> {
+    // Try matching by userId first, then by username
+    const query = {
+      $or: [{ userId }, { username: userId }],
+      status: NotificationStatus.PENDING,
+    };
     return this.notificationModel
-      .find({
-        userId: new Types.ObjectId(userId),
-        status: NotificationStatus.PENDING,
-      })
-      .sort({ createdAt: 1 })
+      .find(query)
+      .sort({ createdAt: -1 })
       .lean()
       .exec();
   }
 
-  /**
-   * Get notification history for a user (paginated)
-   */
+  async markAsRead(userId: string): Promise<number> {
+    const result = await this.notificationModel.updateMany(
+      {
+        $or: [{ userId }, { username: userId }],
+        status: NotificationStatus.PENDING,
+      },
+      { status: NotificationStatus.DELIVERED, deliveredAt: new Date() },
+    );
+    return result.modifiedCount;
+  }
+
   async getHistory(
     userId: string,
     page = 1,
     limit = 20,
   ): Promise<{ notifications: Notification[]; total: number }> {
     const skip = (page - 1) * limit;
+    const filter = { $or: [{ userId }, { username: userId }] };
     const [notifications, total] = await Promise.all([
       this.notificationModel
-        .find({ userId: new Types.ObjectId(userId) })
+        .find(filter)
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limit)
         .lean()
         .exec(),
-      this.notificationModel
-        .countDocuments({ userId: new Types.ObjectId(userId) })
-        .exec(),
+      this.notificationModel.countDocuments(filter).exec(),
     ]);
     return { notifications, total };
   }
 
-  /**
-   * Mark notification as delivered
-   */
   async markDelivered(notificationId: Types.ObjectId): Promise<void> {
     await this.notificationModel.findByIdAndUpdate(notificationId, {
       status: NotificationStatus.DELIVERED,
@@ -151,71 +158,77 @@ export class NotificationService implements OnModuleInit {
     });
   }
 
-  /**
-   * Mark notification as failed
-   */
-  async markFailed(
-    notificationId: Types.ObjectId,
-    error: string,
-  ): Promise<void> {
-    await this.notificationModel.findByIdAndUpdate(notificationId, {
-      status: NotificationStatus.FAILED,
-      errorMessage: error,
-      $inc: { retryCount: 1 },
-    });
-  }
+  // ─── Private ──────────────────────────────────────────────
 
-  /**
-   * Drain Redis queue — process pending notifications
-   */
-  private async drainQueue(): Promise<void> {
-    try {
-      let message = await this.redisService.dequeueNotification();
-      while (message) {
-        if (message.type === "notification" && message.payload) {
-          const { notificationId, userId, event, payload } = message.payload;
-          const delivered = await this.tryDeliverViaWebSocket(
-            userId,
-            event,
-            payload,
-          );
-          if (delivered) {
-            await this.markDelivered(new Types.ObjectId(notificationId));
-          } else {
-            // Re-queue if not delivered (will be retried on next drain cycle)
-            const doc = await this.notificationModel.findById(notificationId);
-            if (doc && doc.status === NotificationStatus.PENDING) {
-              await this.redisService.enqueueNotification(message);
-            }
-          }
-        }
-        message = await this.redisService.dequeueNotification();
-      }
-    } catch (err: any) {
-      this.logger.error(`Drain queue error: ${err.message}`);
-    }
-  }
-
-  /**
-   * Try to deliver via WebSocket REST API
-   */
-  private async tryDeliverViaWebSocket(
+  private async tryDeliver(
     userId: string,
     event: string,
     payload: any,
   ): Promise<boolean> {
     try {
-      const response = await axios.post(`${this.wsBaseUrl}/notify/user`, {
-        userId,
-        event,
-        payload,
-      });
-      return response.data?.delivered ?? false;
-    } catch (err: any) {
-      this.logger.debug(
-        `WebSocket delivery failed for user ${userId}: ${err.message}`,
+      const response = await axios.post(
+        `${this.wsBaseUrl}/notify/user`,
+        { userId, event, payload },
+        { timeout: 3000 },
       );
+      return response.data?.delivered ?? false;
+    } catch {
       return false;
+    }
+  }
+
+  private async drainQueue(): Promise<void> {
+    try {
+      let message = await this.redisService.dequeueNotification();
+      let processed = 0;
+      const maxPerCycle = 20;
+
+      while (message && processed < maxPerCycle) {
+        processed++;
+
+        if (message.type === "notification" && message.payload) {
+          const { notificationId, userId, event, payload } = message.payload;
+
+          const doc = await this.notificationModel
+            .findById(notificationId)
+            .lean()
+            .exec();
+          if (!doc || doc.status !== NotificationStatus.PENDING) {
+            message = await this.redisService.dequeueNotification();
+            continue;
+          }
+
+          const retryCount = doc.retryCount ?? 0;
+          if (retryCount >= 5) {
+            await this.notificationModel.findByIdAndUpdate(notificationId, {
+              status: NotificationStatus.FAILED,
+              errorMessage: "Max retries exceeded",
+            });
+            this.logger.warn(
+              `Notification ${notificationId} failed after 5 retries`,
+            );
+            message = await this.redisService.dequeueNotification();
+            continue;
+          }
+
+          const delivered = await this.tryDeliver(userId, event, payload);
+          if (delivered) {
+            await this.markDelivered(new Types.ObjectId(notificationId));
+            this.logger.debug(
+              `Queued notification ${notificationId} delivered to user ${userId}`,
+            );
+          } else {
+            await this.notificationModel.findByIdAndUpdate(notificationId, {
+              $inc: { retryCount: 1 },
+            });
+            await this.redisService.enqueueNotification(message);
+          }
+        }
+
+        message = await this.redisService.dequeueNotification();
+      }
+    } catch (err: any) {
+      this.logger.error(`Drain queue error: ${err.message}`);
     }
   }
 }

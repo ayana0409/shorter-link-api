@@ -1,5 +1,5 @@
 import { Prop, Schema, SchemaFactory } from "@nestjs/mongoose";
-import { HydratedDocument, Types } from "mongoose";
+import { HydratedDocument } from "mongoose";
 
 export type NotificationDocument = HydratedDocument<Notification>;
 
@@ -11,8 +11,11 @@ export enum NotificationStatus {
 
 @Schema({ timestamps: true })
 export class Notification {
-  @Prop({ type: Types.ObjectId, required: true, index: true })
-  userId!: Types.ObjectId;
+  @Prop({ type: String, required: true, index: true })
+  userId!: string;
+
+  @Prop({ type: String, default: null })
+  username!: string;
 
   @Prop({ required: true })
   event!: string;

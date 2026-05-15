@@ -62,4 +62,15 @@ export class NotificationController {
   broadcast(@Body() body: { event: string; payload: any }) {
     return this.notificationService.broadcast(body.event, body.payload);
   }
+
+  /**
+   * Mark all pending notifications as read for current user
+   * POST /notifications/mark-as-read
+   * Body: { userId: string }
+   */
+  @Post("mark-as-read")
+  @HttpCode(HttpStatus.OK)
+  markAsRead(@Body() body: { userId: string }) {
+    return this.notificationService.markAsRead(body.userId);
+  }
 }
