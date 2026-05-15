@@ -326,6 +326,7 @@ export class RedisService {
   // ─── Notification Queue (High-Level) ─────────────────────
 
   private readonly NOTIFICATION_QUEUE_KEY = "notification_queue";
+  private readonly NOTIFICATION_DEDUP_QUEUE_PREFIX = "notif:queue:";
   private readonly NOTIFICATION_STATUS_KEY = "notification_status";
   private readonly MAX_QUEUE_SIZE = 1000;
 
@@ -446,7 +447,30 @@ export class RedisService {
    * Get pending notification count
    */
   async getPendingNotificationCount(): Promise<number> {
-    return this.client.lLen(this.NOTIFICATION_QUEUE_KEY);
+    const listCount = await this.client.lLen(this.NOTIFICATION_QUEUE_KEY);
+    const dedupKeys = await this.keys(
+      `${this.NOTIFICATION_DEDUP_QUEUE_PREFIX}*`,
+    );
+    return listCount + dedupKeys.length;
+  }
+
+  /**
+   * Get notification queue details for health checks
+   */
+  async getPendingNotificationQueueStats(): Promise<{
+    listCount: number;
+    dedupKeyCount: number;
+    total: number;
+  }> {
+    const listCount = await this.client.lLen(this.NOTIFICATION_QUEUE_KEY);
+    const dedupKeys = await this.keys(
+      `${this.NOTIFICATION_DEDUP_QUEUE_PREFIX}*`,
+    );
+    return {
+      listCount,
+      dedupKeyCount: dedupKeys.length,
+      total: listCount + dedupKeys.length,
+    };
   }
 
   /**

@@ -31,6 +31,7 @@ export class NotificationService implements OnModuleInit {
     } catch {
       this.wsBaseUrl = "http://localhost:3002";
     }
+    // Drain queue every 10s — ping users to fetch notifications
     this.drainInterval = setInterval(() => this.drainQueue(), 10000);
     this.logger.log(`NotificationService initialized (WS: ${this.wsBaseUrl})`);
   }
@@ -38,8 +39,8 @@ export class NotificationService implements OnModuleInit {
   /**
    * Send a notification:
    * 1. Persist to DB (status: pending)
-   * 2. Try immediate WebSocket delivery
-   * 3. If WebSocket fails → push to Redis queue for retry
+   * 2. If user online → ping via WebSocket → user fetches from DB
+   * 3. If user offline → push to Redis queue (1 per user) → retry when online
    */
   async send(
     userId: string,
@@ -47,6 +48,7 @@ export class NotificationService implements OnModuleInit {
     payload: Record<string, any>,
     username?: string,
   ): Promise<Notification> {
+    // 1. Persist to DB
     const notification = await this.notificationModel.create({
       userId,
       username: username || null,
@@ -55,30 +57,25 @@ export class NotificationService implements OnModuleInit {
       status: NotificationStatus.PENDING,
     });
 
-    const delivered = await this.tryDeliver(userId, event, payload);
-    if (delivered) {
-      await this.markDelivered(notification._id);
+    // 2. Try ping user via WebSocket
+    const pinged = await this.pingUser(userId);
+    if (pinged) {
+      this.logger.debug(
+        `Pinged user ${userId} via WebSocket, they will fetch from DB`,
+      );
       return notification;
     }
 
-    // WebSocket unavailable → queue for retry
-    await this.redisService.enqueueNotification({
-      type: "notification",
-      payload: {
-        notificationId: notification._id.toString(),
-        userId,
-        event,
-        payload,
-      },
-      targetUserId: userId,
-    });
-    this.logger.debug(
-      `Notification ${notification._id} queued for user ${userId}`,
-    );
+    // 3. User offline → queue for later (only 1 entry per user)
+    await this.queuePing(userId);
+    this.logger.debug(`User ${userId} offline, queued ping for later`);
 
     return notification;
   }
 
+  /**
+   * Send to multiple users
+   */
   async sendToMany(
     userIds: string[],
     event: string,
@@ -92,11 +89,14 @@ export class NotificationService implements OnModuleInit {
     return notifications;
   }
 
+  /**
+   * Broadcast ping to all connected users
+   */
   async broadcast(event: string, payload: Record<string, any>): Promise<void> {
     try {
       await axios.post(
         `${this.wsBaseUrl}/notify/broadcast`,
-        { event, payload },
+        { event: "new_notification", payload },
         { timeout: 3000 },
       );
     } catch (err: any) {
@@ -105,10 +105,9 @@ export class NotificationService implements OnModuleInit {
   }
 
   /**
-   * Get pending notifications — userId can be ObjectId string or username
+   * Get pending notifications for a user (called by FE on login/poll/ping)
    */
   async getPendingForUser(userId: string): Promise<Notification[]> {
-    // Try matching by userId first, then by username
     const query = {
       $or: [{ userId }, { username: userId }],
       status: NotificationStatus.PENDING,
@@ -120,6 +119,9 @@ export class NotificationService implements OnModuleInit {
       .exec();
   }
 
+  /**
+   * Mark all pending as read
+   */
   async markAsRead(userId: string): Promise<number> {
     const result = await this.notificationModel.updateMany(
       {
@@ -131,6 +133,9 @@ export class NotificationService implements OnModuleInit {
     return result.modifiedCount;
   }
 
+  /**
+   * Get notification history (paginated)
+   */
   async getHistory(
     userId: string,
     page = 1,
@@ -160,15 +165,19 @@ export class NotificationService implements OnModuleInit {
 
   // ─── Private ──────────────────────────────────────────────
 
-  private async tryDeliver(
-    userId: string,
-    event: string,
-    payload: any,
-  ): Promise<boolean> {
+  /**
+   * Ping user via WebSocket — just notify "you have new notifications"
+   * Returns true if user is online and ping was sent
+   */
+  private async pingUser(userId: string): Promise<boolean> {
     try {
       const response = await axios.post(
         `${this.wsBaseUrl}/notify/user`,
-        { userId, event, payload },
+        {
+          userId,
+          event: "new_notification",
+          payload: {}, // empty payload — user will fetch from DB
+        },
         { timeout: 3000 },
       );
       return response.data?.delivered ?? false;
@@ -177,55 +186,52 @@ export class NotificationService implements OnModuleInit {
     }
   }
 
+  /**
+   * Queue a ping for user (only 1 per user in queue)
+   * Uses Redis SET to deduplicate
+   */
+  private async queuePing(userId: string): Promise<void> {
+    // Use a Redis SET key per user to avoid duplicates
+    await this.redisService.set(`notif:queue:${userId}`, "1", { ttl: 3600 }); // 1h TTL
+  }
+
+  /**
+   * Drain queue — ping users who have pending notifications
+   * Only 1 ping per user, user fetches all pending from DB
+   */
   private async drainQueue(): Promise<void> {
     try {
-      let message = await this.redisService.dequeueNotification();
-      let processed = 0;
-      const maxPerCycle = 20;
+      // Get all queued user IDs from Redis
+      const keys = await this.redisService.keys("notif:queue:*");
+      if (!keys || keys.length === 0) return;
 
-      while (message && processed < maxPerCycle) {
-        processed++;
+      for (const key of keys) {
+        const userId = key.replace("notif:queue:", "");
 
-        if (message.type === "notification" && message.payload) {
-          const { notificationId, userId, event, payload } = message.payload;
+        // Check if user has pending notifications
+        const pendingCount = await this.notificationModel
+          .countDocuments({
+            $or: [{ userId }, { username: userId }],
+            status: NotificationStatus.PENDING,
+          })
+          .exec();
 
-          const doc = await this.notificationModel
-            .findById(notificationId)
-            .lean()
-            .exec();
-          if (!doc || doc.status !== NotificationStatus.PENDING) {
-            message = await this.redisService.dequeueNotification();
-            continue;
-          }
-
-          const retryCount = doc.retryCount ?? 0;
-          if (retryCount >= 5) {
-            await this.notificationModel.findByIdAndUpdate(notificationId, {
-              status: NotificationStatus.FAILED,
-              errorMessage: "Max retries exceeded",
-            });
-            this.logger.warn(
-              `Notification ${notificationId} failed after 5 retries`,
-            );
-            message = await this.redisService.dequeueNotification();
-            continue;
-          }
-
-          const delivered = await this.tryDeliver(userId, event, payload);
-          if (delivered) {
-            await this.markDelivered(new Types.ObjectId(notificationId));
-            this.logger.debug(
-              `Queued notification ${notificationId} delivered to user ${userId}`,
-            );
-          } else {
-            await this.notificationModel.findByIdAndUpdate(notificationId, {
-              $inc: { retryCount: 1 },
-            });
-            await this.redisService.enqueueNotification(message);
-          }
+        if (pendingCount === 0) {
+          // No pending notifications — remove from queue
+          await this.redisService.del(key);
+          continue;
         }
 
-        message = await this.redisService.dequeueNotification();
+        // Try ping user
+        const pinged = await this.pingUser(userId);
+        if (pinged) {
+          // User online — remove from queue, they will fetch from DB
+          await this.redisService.del(key);
+          this.logger.debug(
+            `Drain: pinged user ${userId}, they have ${pendingCount} pending notifications`,
+          );
+        }
+        // If user still offline — keep in queue for next drain cycle
       }
     } catch (err: any) {
       this.logger.error(`Drain queue error: ${err.message}`);

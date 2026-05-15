@@ -26,6 +26,11 @@ export class AppService {
     redis: {
       connected: boolean;
       pendingNotifications: number;
+      queue: {
+        listCount: number;
+        dedupKeyCount: number;
+        total: number;
+      };
       cache: {
         totalKeys: number;
         estimatedMemoryKB: number;
@@ -65,6 +70,12 @@ export class AppService {
     const pendingNotifications =
       await this.redisService.getPendingNotificationCount();
 
+    let queueStats = {
+      listCount: 0,
+      dedupKeyCount: 0,
+      total: pendingNotifications,
+    };
+
     // Cache stats (only if Redis is connected)
     let cacheStats = {
       totalKeys: 0,
@@ -89,6 +100,16 @@ export class AppService {
       } catch {
         // ignore cache stats errors
       }
+
+      try {
+        queueStats = await this.redisService.getPendingNotificationQueueStats();
+      } catch {
+        queueStats = {
+          listCount: 0,
+          dedupKeyCount: 0,
+          total: pendingNotifications,
+        };
+      }
     }
 
     return {
@@ -97,6 +118,7 @@ export class AppService {
       redis: {
         connected: redisConnected,
         pendingNotifications,
+        queue: queueStats,
         cache: cacheStats,
       },
       uptime: Math.floor(process.uptime()),
