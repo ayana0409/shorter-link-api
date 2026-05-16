@@ -266,6 +266,72 @@ export class RedisService {
     }
   }
 
+  // ─── Sorted Set Operations (for active sessions with TTL) ─
+
+  /** Add member to sorted set with score (timestamp) */
+  async zadd(
+    key: string,
+    score: number,
+    member: string,
+  ): Promise<number | null> {
+    try {
+      return await this.client.zAdd(key, { score, value: member });
+    } catch (err) {
+      this.logger.error(`Redis ZADD error [${key}]:`, err);
+      return null;
+    }
+  }
+
+  /** Remove member from sorted set */
+  async zrem(key: string, ...members: string[]): Promise<number | null> {
+    try {
+      return await this.client.zRem(key, members);
+    } catch (err) {
+      this.logger.error(`Redis ZREM error [${key}]:`, err);
+      return null;
+    }
+  }
+
+  /** Count members in sorted set */
+  async zcard(key: string): Promise<number> {
+    try {
+      return await this.client.zCard(key);
+    } catch {
+      return 0;
+    }
+  }
+
+  /** Get all members in sorted set (by score ascending) */
+  async zrange(key: string, start = 0, stop = -1): Promise<string[]> {
+    try {
+      return await this.client.zRange(key, start, stop);
+    } catch {
+      return [];
+    }
+  }
+
+  /** Remove members with score older than maxScore (cleanup expired) */
+  async zremrangebyscore(
+    key: string,
+    minScore: number,
+    maxScore: number,
+  ): Promise<number> {
+    try {
+      return await this.client.zRemRangeByScore(key, minScore, maxScore);
+    } catch {
+      return 0;
+    }
+  }
+
+  /** Get score of a member */
+  async zscore(key: string, member: string): Promise<number | null> {
+    try {
+      return await this.client.zScore(key, member);
+    } catch {
+      return null;
+    }
+  }
+
   // ─── List / Queue Operations ──────────────────────────────
 
   /**

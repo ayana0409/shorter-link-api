@@ -1,4 +1,4 @@
-import { forwardRef, Module } from "@nestjs/common";
+import { forwardRef, Module, OnModuleInit } from "@nestjs/common";
 import { AuthService } from "./auth.service";
 import { AuthController } from "./auth.controller";
 import { AccountModule } from "../account/account.module";
@@ -37,4 +37,11 @@ import { ManagerGuard } from "./manager.guard";
   providers: [AuthService, AuthGuard, AdminGuard, ManagerGuard],
   exports: [AuthService, AuthGuard, AdminGuard, ManagerGuard],
 })
-export class AuthModule {}
+export class AuthModule implements OnModuleInit {
+  constructor(private readonly authService: AuthService) {}
+
+  async onModuleInit() {
+    // Recover active sessions from existing refresh tokens on startup
+    await this.authService.recoverActiveSessions();
+  }
+}

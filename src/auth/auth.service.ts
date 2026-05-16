@@ -24,6 +24,43 @@ export class AuthService {
   ) {}
 
   /**
+   * Recover active sessions from existing refresh tokens on startup.
+   * Called by AuthModule.onModuleInit() to rebuild auth:active_sessions ZSET
+   * in case Redis data was lost (e.g., local Redis restart without persistence).
+   */
+  async recoverActiveSessions(): Promise<void> {
+    try {
+      // Find all refresh token keys: refresh:<username>:<tokenId>
+      const refreshKeys = await this.redisService.keys("refresh:*");
+      if (refreshKeys.length === 0) return;
+
+      // Extract unique usernames and find the latest expiry per user
+      const userTokens = new Map<string, number>();
+      for (const key of refreshKeys) {
+        const parts = key.split(":");
+        if (parts.length >= 3) {
+          const username = parts[1];
+          const ttl = await this.redisService.ttl(key);
+          if (ttl > 0) {
+            const expiry = Date.now() + ttl * 1000;
+            const existing = userTokens.get(username);
+            if (!existing || expiry > existing) {
+              userTokens.set(username, expiry);
+            }
+          }
+        }
+      }
+
+      // Rebuild auth:active_sessions ZSET
+      for (const [username, expiry] of userTokens) {
+        await this.redisService.zadd("auth:active_sessions", expiry, username);
+      }
+    } catch {
+      // ignore recovery errors
+    }
+  }
+
+  /**
    * Helper to resolve a message using the default locale
    */
   private msg(keyPath: string, ...args: any[]): string {
@@ -88,8 +125,14 @@ export class AuthService {
       { ttl: refreshTokenTtl },
     );
 
-    // Track active session
-    await this.redisService.sadd("active_sessions", account.username);
+    // Track active session in sorted set (score = expiry timestamp)
+    // Session expires when refresh token expires
+    const sessionExpiry = Date.now() + refreshTokenTtl * 1000;
+    await this.redisService.zadd(
+      "auth:active_sessions",
+      sessionExpiry,
+      account.username,
+    );
 
     return {
       access_token: accessToken,
@@ -154,8 +197,13 @@ export class AuthService {
       { ttl: refreshTokenTtl },
     );
 
-    // Ensure user stays in active sessions
-    await this.redisService.sadd("active_sessions", account.username);
+    // Update active session expiry in sorted set
+    const sessionExpiry = Date.now() + refreshTokenTtl * 1000;
+    await this.redisService.zadd(
+      "auth:active_sessions",
+      sessionExpiry,
+      account.username,
+    );
 
     return {
       access_token: newAccessToken,
@@ -175,18 +223,23 @@ export class AuthService {
     );
     if (remainingTokens.length === 0) {
       // No more sessions — remove from active sessions
-      await this.redisService.srem("active_sessions", username);
+      await this.redisService.zrem("auth:active_sessions", username);
     }
   }
 
   /**
-   * Get active session statistics
+   * Get active session statistics.
+   * Cleans up expired sessions (score < now) before returning.
    */
   async getActiveSessionStats(): Promise<{
     totalActiveUsers: number;
     users: string[];
   }> {
-    const users = await this.redisService.smembers("active_sessions");
+    const now = Date.now();
+    // Remove expired sessions (score < now)
+    await this.redisService.zremrangebyscore("auth:active_sessions", 0, now);
+    // Get remaining active sessions
+    const users = await this.redisService.zrange("auth:active_sessions");
     return {
       totalActiveUsers: users.length,
       users,
