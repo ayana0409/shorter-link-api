@@ -65,6 +65,7 @@ export class ConfigController {
       "REDIS_PASSWORD",
       "ACCESS_TOKEN_TTL",
       "REFRESH_TOKEN_TTL",
+      "WS_URL",
     ];
 
     if (!allowedKeys.includes(key)) {
