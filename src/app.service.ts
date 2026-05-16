@@ -3,6 +3,7 @@ import { InjectConnection } from "@nestjs/mongoose";
 import { Connection } from "mongoose";
 import { ConfigManagerService } from "./config/config-manager.service";
 import { RedisService } from "./redis";
+import { AuthService } from "./auth/auth.service";
 
 @Injectable()
 export class AppService {
@@ -10,6 +11,7 @@ export class AppService {
     @InjectConnection() private readonly connection: Connection,
     private readonly configManager: ConfigManagerService,
     private readonly redisService: RedisService,
+    private readonly authService: AuthService,
   ) {}
 
   getHello(): string {
@@ -44,6 +46,7 @@ export class AppService {
     timestamp: string;
     rateLimit: { ttl: number; limit: number };
     memory: { used: number; total: number; unit: string };
+    activeSessions: { total: number; users: string[] };
   }> {
     const dbStatus = this.connection.readyState;
     const dbStates: Record<number, string> = {
@@ -112,6 +115,14 @@ export class AppService {
       }
     }
 
+    // Active session stats
+    let activeSessions = { totalActiveUsers: 0, users: [] as string[] };
+    try {
+      activeSessions = await this.authService.getActiveSessionStats();
+    } catch {
+      // ignore session stats errors
+    }
+
     return {
       status: dbStatus === 1 && redisConnected ? "healthy" : "unhealthy",
       database: dbStates[dbStatus] || "unknown",
@@ -131,6 +142,10 @@ export class AppService {
         used: usedMB,
         total: totalMB,
         unit: "MB",
+      },
+      activeSessions: {
+        total: activeSessions.totalActiveUsers,
+        users: activeSessions.users,
       },
     };
   }

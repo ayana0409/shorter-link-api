@@ -216,6 +216,56 @@ export class RedisService {
     }
   }
 
+  // ─── Set Operations (for active session tracking) ────────
+
+  /** Add member to set */
+  async sadd(key: string, ...members: string[]): Promise<number | null> {
+    try {
+      return await this.client.sAdd(key, members);
+    } catch (err) {
+      this.logger.error(`Redis SADD error [${key}]:`, err);
+      return null;
+    }
+  }
+
+  /** Remove member from set */
+  async srem(key: string, ...members: string[]): Promise<number | null> {
+    try {
+      return await this.client.sRem(key, members);
+    } catch (err) {
+      this.logger.error(`Redis SREM error [${key}]:`, err);
+      return null;
+    }
+  }
+
+  /** Get set cardinality (count) */
+  async scard(key: string): Promise<number> {
+    try {
+      return await this.client.sCard(key);
+    } catch {
+      return 0;
+    }
+  }
+
+  /** Get all members of set */
+  async smembers(key: string): Promise<string[]> {
+    try {
+      return await this.client.sMembers(key);
+    } catch {
+      return [];
+    }
+  }
+
+  /** Check if member exists in set */
+  async sismember(key: string, member: string): Promise<boolean> {
+    try {
+      const result = await this.client.sIsMember(key, member);
+      return Boolean(result);
+    } catch {
+      return false;
+    }
+  }
+
   // ─── List / Queue Operations ──────────────────────────────
 
   /**
@@ -454,8 +504,6 @@ export class RedisService {
     return listCount + dedupKeys.length;
   }
 
-
-
   /**
    * Get notification status
    */
@@ -693,12 +741,12 @@ export class RedisService {
     try {
       await this.client.flushDb();
       await this.client.del(this.NOTIFICATION_QUEUE_KEY);
-      await this.client.del(this.NOTIFICATION_DEDUP_QUEUE_PREFIX + '*');
+      await this.client.del(this.NOTIFICATION_DEDUP_QUEUE_PREFIX + "*");
       await this.cleanupNotificationStatus(0);
-      this.logger.log('Redis cache and notification queue flushed');
+      this.logger.log("Redis cache and notification queue flushed");
       return true;
     } catch (err: any) {
-      this.logger.error('Flush cache error:', err);
+      this.logger.error("Flush cache error:", err);
       return false;
     }
   }
@@ -711,7 +759,9 @@ export class RedisService {
     total: number;
   }> {
     const listCount = await this.client.lLen(this.NOTIFICATION_QUEUE_KEY);
-    const dedupKeys = await this.keys(`${this.NOTIFICATION_DEDUP_QUEUE_PREFIX}*`);
+    const dedupKeys = await this.keys(
+      `${this.NOTIFICATION_DEDUP_QUEUE_PREFIX}*`,
+    );
     return {
       listCount,
       dedupKeyCount: dedupKeys.length,

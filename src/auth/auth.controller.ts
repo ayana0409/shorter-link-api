@@ -1,8 +1,17 @@
-import { Body, Controller, Post, Req, Res, UseGuards } from "@nestjs/common";
+import {
+  Body,
+  Controller,
+  Get,
+  Post,
+  Req,
+  Res,
+  UseGuards,
+} from "@nestjs/common";
 import { AuthService } from "./auth.service";
 import { LoginDto } from "./dto/login.dto";
 import { RefreshTokenDto } from "./dto/refresh-token.dto";
 import { AuthGuard } from "./auth.guard";
+import { AdminGuard } from "./admin.guard";
 import { Request, Response } from "express";
 import { ConfigService } from "@nestjs/config";
 
@@ -107,5 +116,11 @@ export class AuthController {
       sameSite: isProduction ? "strict" : "lax",
       path: "/",
     });
+  }
+
+  @Get("stats/sessions")
+  @UseGuards(AuthGuard, AdminGuard)
+  async getActiveSessions() {
+    return this.authService.getActiveSessionStats();
   }
 }

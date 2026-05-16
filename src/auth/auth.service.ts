@@ -88,6 +88,9 @@ export class AuthService {
       { ttl: refreshTokenTtl },
     );
 
+    // Track active session
+    await this.redisService.sadd("active_sessions", account.username);
+
     return {
       access_token: accessToken,
       expires_in: accessTokenTtl,
@@ -151,6 +154,9 @@ export class AuthService {
       { ttl: refreshTokenTtl },
     );
 
+    // Ensure user stays in active sessions
+    await this.redisService.sadd("active_sessions", account.username);
+
     return {
       access_token: newAccessToken,
       expires_in: accessTokenTtl,
@@ -162,5 +168,28 @@ export class AuthService {
   async logout(refreshToken: string, username: string) {
     // Revoke the specific refresh token
     await this.redisService.del(`refresh:${username}:${refreshToken}`);
+
+    // Check if user has any remaining refresh tokens
+    const remainingTokens = await this.redisService.keys(
+      `refresh:${username}:*`,
+    );
+    if (remainingTokens.length === 0) {
+      // No more sessions — remove from active sessions
+      await this.redisService.srem("active_sessions", username);
+    }
+  }
+
+  /**
+   * Get active session statistics
+   */
+  async getActiveSessionStats(): Promise<{
+    totalActiveUsers: number;
+    users: string[];
+  }> {
+    const users = await this.redisService.smembers("active_sessions");
+    return {
+      totalActiveUsers: users.length,
+      users,
+    };
   }
 }
