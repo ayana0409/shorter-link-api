@@ -63,6 +63,8 @@ export const MESSAGES_EN = {
     ADMIN_ACCESS_REQUIRED: "Admin access required.",
     MANAGER_ACCESS_REQUIRED: "Admin or Manager access required.",
     TOKEN_REQUIRED: "Authentication required. Please provide a token.",
+    INVALID_REFRESH_TOKEN: "Session has expired. Please log in again.",
+    SESSION_EXPIRED: "Your session has expired. Please log in again.",
   },
 
   // ==================== CONFIG MODULE ====================

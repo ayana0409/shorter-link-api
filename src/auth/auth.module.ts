@@ -6,6 +6,7 @@ import { JwtModule } from "@nestjs/jwt";
 import { ConfigModule, ConfigService } from "@nestjs/config";
 import { AuthGuard } from "./auth.guard";
 import { AdminGuard } from "./admin.guard";
+import { ManagerGuard } from "./manager.guard";
 
 @Module({
   imports: [
@@ -20,20 +21,20 @@ import { AdminGuard } from "./admin.guard";
           throw new Error("JWT_SECRET is not defined");
         }
 
-        const expiresIn = configService.get<string>("EXPIRES");
+        const expiresIn = configService.get<string>("ACCESS_TOKEN_TTL");
         if (!expiresIn) {
-          throw new Error("EXPIRES is not defined");
+          throw new Error("ACCESS_TOKEN_TTL is not defined");
         }
 
         return {
           secret: secretKey,
-          signOptions: { expiresIn },
+          signOptions: { expiresIn: Number(expiresIn) },
         };
       },
     }),
   ],
   controllers: [AuthController],
-  providers: [AuthService, AuthGuard, AdminGuard],
-  exports: [AuthService, AuthGuard, AdminGuard],
+  providers: [AuthService, AuthGuard, AdminGuard, ManagerGuard],
+  exports: [AuthService, AuthGuard, AdminGuard, ManagerGuard],
 })
 export class AuthModule {}

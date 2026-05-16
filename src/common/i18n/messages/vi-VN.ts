@@ -64,6 +64,9 @@ export const MESSAGES_VI = {
     ADMIN_ACCESS_REQUIRED: "Yêu cầu quyền truy cập Admin.",
     MANAGER_ACCESS_REQUIRED: "Yêu cầu quyền truy cập Admin hoặc Manager.",
     TOKEN_REQUIRED: "Yêu cầu xác thực. Vui lòng cung cấp token.",
+    INVALID_REFRESH_TOKEN:
+      "Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.",
+    SESSION_EXPIRED: "Phiên của bạn đã hết hạn. Vui lòng đăng nhập lại.",
   },
 
   // ==================== CONFIG MODULE ====================

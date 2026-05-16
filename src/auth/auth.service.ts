@@ -9,6 +9,9 @@ import { AccountService } from "../account/account.service";
 import { JwtService } from "@nestjs/jwt/dist/jwt.service";
 import * as bcrypt from "bcrypt";
 import { I18nService } from "../common/i18n";
+import { RedisService } from "../redis";
+import { ConfigManagerService } from "../config/config-manager.service";
+import { v4 as uuidv4 } from "uuid";
 
 @Injectable()
 export class AuthService {
@@ -16,6 +19,8 @@ export class AuthService {
     private readonly accountService: AccountService,
     private jwtService: JwtService,
     private i18n: I18nService,
+    private redisService: RedisService,
+    private configManager: ConfigManagerService,
   ) {}
 
   /**
@@ -67,16 +72,95 @@ export class AuthService {
       role: account.role,
       sub: account.username,
     };
-    const token = this.jwtService.sign(payload);
+
+    const accessToken = this.jwtService.sign(payload);
+    const refreshTokenId = uuidv4();
+
+    const [accessTokenTtl, refreshTokenTtl] = await Promise.all([
+      this.configManager.getNumberValue("ACCESS_TOKEN_TTL", 900),
+      this.configManager.getNumberValue("REFRESH_TOKEN_TTL", 604800),
+    ]);
+
+    // Store refresh token in Redis with TTL
+    await this.redisService.set(
+      `refresh:${account.username}:${refreshTokenId}`,
+      account.username,
+      { ttl: refreshTokenTtl },
+    );
 
     return {
-      access_token: token,
-      expires_in: 3600,
+      access_token: accessToken,
+      expires_in: accessTokenTtl,
+      refresh_token: refreshTokenId,
+      refresh_expires_in: refreshTokenTtl,
       user: {
         username: account.username,
         fullname: account.fullname,
         role: account.role,
       },
     };
+  }
+
+  async refreshTokens(refreshToken: string, username: string) {
+    // Validate the refresh token exists in Redis
+    const storedValue = await this.redisService.get(
+      `refresh:${username}:${refreshToken}`,
+    );
+
+    if (!storedValue) {
+      throw new UnauthorizedException(this.msg("auth.INVALID_REFRESH_TOKEN"));
+    }
+
+    // Get the account
+    let account: AccountDocument;
+    try {
+      account = await this.accountService.findOneByUsername(username);
+    } catch {
+      // If account no longer exists, revoke all refresh tokens for this username
+      await this.redisService.del(`refresh:${username}:${refreshToken}`);
+      throw new UnauthorizedException(this.msg("auth.INVALID_REFRESH_TOKEN"));
+    }
+
+    if (!account.isActive) {
+      await this.redisService.del(`refresh:${username}:${refreshToken}`);
+      throw new ForbiddenException(this.msg("auth.ACCOUNT_LOCKED"));
+    }
+
+    // Token rotation: delete old refresh token, issue new one
+    await this.redisService.del(`refresh:${username}:${refreshToken}`);
+
+    const payload = {
+      _id: account._id,
+      username: account.username,
+      fullname: account.fullname,
+      role: account.role,
+      sub: account.username,
+    };
+
+    const newAccessToken = this.jwtService.sign(payload);
+    const newRefreshTokenId = uuidv4();
+
+    const [accessTokenTtl, refreshTokenTtl] = await Promise.all([
+      this.configManager.getNumberValue("ACCESS_TOKEN_TTL", 900),
+      this.configManager.getNumberValue("REFRESH_TOKEN_TTL", 604800),
+    ]);
+
+    await this.redisService.set(
+      `refresh:${account.username}:${newRefreshTokenId}`,
+      account.username,
+      { ttl: refreshTokenTtl },
+    );
+
+    return {
+      access_token: newAccessToken,
+      expires_in: accessTokenTtl,
+      refresh_token: newRefreshTokenId,
+      refresh_expires_in: refreshTokenTtl,
+    };
+  }
+
+  async logout(refreshToken: string, username: string) {
+    // Revoke the specific refresh token
+    await this.redisService.del(`refresh:${username}:${refreshToken}`);
   }
 }
