@@ -5,6 +5,7 @@ import { ConfigService } from "@nestjs/config";
 import { AllExceptionsFilter } from "./common/filters/all-exceptions.filter";
 import { LoggingInterceptor } from "./common/interceptors/logging.interceptor";
 import helmet from "helmet";
+import cookieParser from "cookie-parser";
 
 async function bootstrap() {
   // Start NestJS app — MongoDB connection with infinite retry
@@ -13,6 +14,9 @@ async function bootstrap() {
 
   // Security headers
   app.use(helmet());
+
+  // Cookie parser for HttpOnly refresh token cookies
+  app.use(cookieParser());
 
   app.useGlobalFilters(app.get(AllExceptionsFilter));
   app.useGlobalInterceptors(app.get(LoggingInterceptor));
