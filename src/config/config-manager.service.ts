@@ -187,22 +187,10 @@ export class ConfigManagerService implements OnModuleInit {
   }
 
   async getByKey(key: string): Promise<string | null> {
-    // Try Redis cache first
-    if (this.redis) {
-      try {
-        const cached = await this.redis.getCachedConfig(key);
-        if (cached !== null && cached !== undefined) {
-          return cached;
-        }
-      } catch {
-        // ignore cache read errors, fall through to DB
-      }
-    }
-
-    // Try to get from DB
+    // 1. Try DB first (source of truth)
     const config = await this.configModel.findOne({ key }).exec();
     if (config) {
-      // Populate cache for next read
+      // Populate Redis cache for next read
       if (this.redis) {
         try {
           await this.redis.cacheConfig(key, config.value);
@@ -213,9 +201,24 @@ export class ConfigManagerService implements OnModuleInit {
       return config.value;
     }
 
-    // Fallback to .env
+    // 2. Fallback to .env if not in DB
     const envValue = this.configService.get<string>(key);
-    return envValue ?? null;
+    if (envValue) {
+      // Auto-seed into DB for next time
+      try {
+        await this.configModel.create({
+          key,
+          value: envValue,
+          description: `Auto-seeded from .env`,
+          type: "string",
+        });
+      } catch {
+        // ignore duplicate errors
+      }
+      return envValue;
+    }
+
+    return null;
   }
 
   async updateByKey(key: string, updateConfigDto: UpdateConfigDto) {
