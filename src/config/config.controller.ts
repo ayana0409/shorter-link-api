@@ -63,6 +63,8 @@ export class ConfigController {
       "REDIS_PORT",
       "REDIS_USERNAME",
       "REDIS_PASSWORD",
+      "ACCESS_TOKEN_TTL",
+      "REFRESH_TOKEN_TTL",
     ];
 
     if (!allowedKeys.includes(key)) {

@@ -128,6 +128,21 @@ export class ConfigManagerService implements OnModuleInit {
         type: "string",
         isHidden: true,
       },
+      // ─── Auth Token ─────────────────────────────────────────
+      {
+        key: "ACCESS_TOKEN_TTL",
+        value: this.configService.get<string>("ACCESS_TOKEN_TTL", "900"),
+        description:
+          "Access token expiry time (seconds). Default: 900 (15 minutes)",
+        type: "number",
+      },
+      {
+        key: "REFRESH_TOKEN_TTL",
+        value: this.configService.get<string>("REFRESH_TOKEN_TTL", "604800"),
+        description:
+          "Refresh token expiry time (seconds). Default: 604800 (7 days)",
+        type: "number",
+      },
       // ─── Redis Connection ─────────────────────────────────────
       {
         key: "REDIS_HOST",
