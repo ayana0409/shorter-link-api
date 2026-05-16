@@ -21,14 +21,21 @@ import { ManagerGuard } from "./manager.guard";
           throw new Error("JWT_SECRET is not defined");
         }
 
-        const expiresIn = configService.get<string>("ACCESS_TOKEN_TTL");
-        if (!expiresIn) {
+        const expiresInRaw = configService.get<string>("ACCESS_TOKEN_TTL");
+        if (!expiresInRaw) {
           throw new Error("ACCESS_TOKEN_TTL is not defined");
+        }
+
+        const expiresInNum = Number(expiresInRaw);
+        if (isNaN(expiresInNum) || expiresInNum <= 0) {
+          throw new Error(
+            `ACCESS_TOKEN_TTL must be a valid positive number, got: "${expiresInRaw}"`,
+          );
         }
 
         return {
           secret: secretKey,
-          signOptions: { expiresIn: Number(expiresIn) },
+          signOptions: { expiresIn: expiresInNum },
         };
       },
     }),
