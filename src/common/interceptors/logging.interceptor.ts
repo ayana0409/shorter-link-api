@@ -12,6 +12,15 @@ import { AuditLogService } from "../../audit-log/audit-log.service";
 export class LoggingInterceptor implements NestInterceptor {
   private readonly logger = new Logger(LoggingInterceptor.name);
 
+  /** Endpoints to skip logging (auth, health checks, etc.) */
+  private readonly SKIP_LOG_PATTERNS = [
+    { method: "POST", path: "/auth/login" },
+    { method: "POST", path: "/auth/refresh" },
+    { method: "POST", path: "/auth/logout" },
+    { method: "GET", path: "/ping" },
+    { method: "GET", path: "/health" },
+  ];
+
   constructor(private readonly auditLogService: AuditLogService) {}
 
   intercept(context: ExecutionContext, next: CallHandler): Observable<any> {
@@ -24,9 +33,15 @@ export class LoggingInterceptor implements NestInterceptor {
     const user = request.user ? JSON.stringify(request.user) : undefined;
     const startTime = Date.now();
 
+    // Skip logging for auth endpoints, health checks, etc.
+    const shouldSkip = this.SKIP_LOG_PATTERNS.some(
+      (p) => p.method === method && url.startsWith(p.path),
+    );
+
     return next.handle().pipe(
       tap({
         next: () => {
+          if (shouldSkip) return;
           if (["POST", "PUT", "PATCH", "DELETE"].includes(method)) {
             const duration = Date.now() - startTime;
             const parts = [`${method} ${url} completed`, `${duration}ms`];
