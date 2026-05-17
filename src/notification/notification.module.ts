@@ -8,6 +8,7 @@ import {
 } from "./schemas/notification.schema";
 import { AuthModule } from "../auth/auth.module";
 import { AccountModule } from "../account/account.module";
+import { RedisModule } from "../redis/redis.module";
 
 @Module({
   imports: [
@@ -16,6 +17,7 @@ import { AccountModule } from "../account/account.module";
     ]),
     AuthModule,
     AccountModule,
+    RedisModule,
   ],
   controllers: [NotificationController],
   providers: [NotificationService],

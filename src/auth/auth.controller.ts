@@ -87,7 +87,10 @@ export class AuthController {
   }
 
   /**
-   * Set refresh token as HttpOnly Secure SameSite cookie
+   * Set refresh token as HttpOnly Secure SameSite cookie.
+   * Uses sameSite:"none" + secure:true when FE and BE are on different domains
+   * so that cross-origin requests (e.g. shink.onrender.com → shortenlinkapi.onrender.com)
+   * include the refresh token cookie.
    */
   private setRefreshTokenCookie(res: Response, refreshToken: string) {
     const isProduction =
@@ -97,23 +100,21 @@ export class AuthController {
 
     res.cookie("refresh_token", refreshToken, {
       httpOnly: true,
-      secure: isProduction,
-      sameSite: isProduction ? "strict" : "lax",
+      secure: true,
+      sameSite: "none",
       maxAge: refreshTtlMs,
       path: "/",
     });
   }
 
   /**
-   * Clear refresh token cookie
+   * Clear refresh token cookie — must match setRefreshTokenCookie options
    */
   private clearRefreshTokenCookie(res: Response) {
-    const isProduction =
-      this.configService.get<string>("NODE_ENV") === "production";
     res.clearCookie("refresh_token", {
       httpOnly: true,
-      secure: isProduction,
-      sameSite: isProduction ? "strict" : "lax",
+      secure: true,
+      sameSite: "none",
       path: "/",
     });
   }

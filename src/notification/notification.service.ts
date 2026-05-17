@@ -1,6 +1,6 @@
-import { Injectable, Logger, OnModuleInit } from "@nestjs/common";
+import { Injectable, Logger, OnModuleInit, OnModuleDestroy } from "@nestjs/common";
 import { InjectModel } from "@nestjs/mongoose";
-import { Model, Types } from "mongoose";
+import { Model } from "mongoose";
 import {
   Notification,
   NotificationStatus,
@@ -10,10 +10,13 @@ import { ConfigManagerService } from "../config/config-manager.service";
 import axios from "axios";
 
 @Injectable()
-export class NotificationService implements OnModuleInit {
+export class NotificationService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(NotificationService.name);
   private wsBaseUrl: string = "http://localhost:3002";
   private drainInterval: NodeJS.Timeout | null = null;
+
+  /** Redis set key — stores userIds that have pending notifications queued */
+  private readonly QUEUE_SET_KEY = "notif:queued_users";
 
   constructor(
     @InjectModel(Notification.name)
@@ -31,16 +34,24 @@ export class NotificationService implements OnModuleInit {
     } catch {
       this.wsBaseUrl = "http://localhost:3002";
     }
-    // Drain queue every 10s — ping users to fetch notifications
+    // Drain queue every 10s — retry pinging users who were offline
     this.drainInterval = setInterval(() => this.drainQueue(), 10000);
     this.logger.log(`NotificationService initialized (WS: ${this.wsBaseUrl})`);
+  }
+
+  onModuleDestroy() {
+    if (this.drainInterval) {
+      clearInterval(this.drainInterval);
+      this.drainInterval = null;
+    }
   }
 
   /**
    * Send a notification:
    * 1. Persist to DB (status: pending)
-   * 2. If user online → ping via WebSocket → user fetches from DB
-   * 3. If user offline → push to Redis queue (1 per user) → retry when online
+   * 2. Try ping via WebSocket — if success, FE will fetch from DB
+   * 3. If ping fails (WS offline / user offline) → add userId to Redis queue
+   * 4. Drain queue periodically retries; on success removes userId from queue
    */
   async send(
     userId: string,
@@ -58,17 +69,22 @@ export class NotificationService implements OnModuleInit {
     });
 
     // 2. Try ping user via WebSocket
-    const pinged = await this.pingUser(userId);
-    if (pinged) {
+    const online = await this.tryPingUser(userId, username);
+    if (online) {
       this.logger.debug(
-        `Pinged user ${userId} via WebSocket, they will fetch from DB`,
+        `User ${userId} is online, pinged — FE will fetch pending from DB`,
       );
-      return notification;
+      // Notification stays pending — FE fetches and marks as read
+    } else {
+      // 3. User offline or WS unreachable → add to Redis queue for retry
+      await this.addToQueue(userId);
+      if (username && username !== userId) {
+        await this.addToQueue(username);
+      }
+      this.logger.debug(
+        `User ${userId} offline / WS unreachable, queued notification ${notification._id} (queued for drain)`,
+      );
     }
-
-    // 3. User offline → queue for later (only 1 entry per user)
-    await this.queuePing(userId);
-    this.logger.debug(`User ${userId} offline, queued ping for later`);
 
     return notification;
   }
@@ -90,13 +106,13 @@ export class NotificationService implements OnModuleInit {
   }
 
   /**
-   * Broadcast ping to all connected users
+   * Broadcast to all connected users
    */
   async broadcast(event: string, payload: Record<string, any>): Promise<void> {
     try {
       await axios.post(
         `${this.wsBaseUrl}/notify/broadcast`,
-        { event: "new_notification", payload },
+        { event, payload },
         { timeout: 3000 },
       );
     } catch (err: any) {
@@ -105,7 +121,7 @@ export class NotificationService implements OnModuleInit {
   }
 
   /**
-   * Get pending notifications for a user (called by FE on login/poll/ping)
+   * Get pending notifications for a user (called by FE on login/reconnect)
    */
   async getPendingForUser(userId: string): Promise<Notification[]> {
     const query = {
@@ -120,7 +136,7 @@ export class NotificationService implements OnModuleInit {
   }
 
   /**
-   * Mark all pending as read
+   * Mark all pending as delivered
    */
   async markAsRead(userId: string): Promise<number> {
     const result = await this.notificationModel.updateMany(
@@ -156,27 +172,35 @@ export class NotificationService implements OnModuleInit {
     return { notifications, total };
   }
 
-  async markDelivered(notificationId: Types.ObjectId): Promise<void> {
-    await this.notificationModel.findByIdAndUpdate(notificationId, {
-      status: NotificationStatus.DELIVERED,
-      deliveredAt: new Date(),
-    });
-  }
-
   // ─── Private ──────────────────────────────────────────────
 
   /**
-   * Ping user via WebSocket — just notify "you have new notifications"
-   * Returns true if user is online and ping was sent
+   * Try to ping a user via WebSocket (empty payload — FE fetches from DB).
+   * Tries userId first, then username as fallback.
+   * Returns true only if WS gateway confirms user is connected.
    */
-  private async pingUser(userId: string): Promise<boolean> {
+  private async tryPingUser(
+    userId: string,
+    username?: string,
+  ): Promise<boolean> {
+    if (await this.tryPing(userId)) return true;
+    if (username && username !== userId) {
+      if (await this.tryPing(username)) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Send ping to a single target via WS gateway.
+   */
+  private async tryPing(target: string): Promise<boolean> {
     try {
       const response = await axios.post(
         `${this.wsBaseUrl}/notify/user`,
         {
-          userId,
+          userId: target,
           event: "new_notification",
-          payload: {}, // empty payload — user will fetch from DB
+          payload: {},
         },
         { timeout: 3000 },
       );
@@ -187,51 +211,56 @@ export class NotificationService implements OnModuleInit {
   }
 
   /**
-   * Queue a ping for user (only 1 per user in queue)
-   * Uses Redis SET to deduplicate
+   * Add userId to Redis queue set for later drain.
    */
-  private async queuePing(userId: string): Promise<void> {
-    // Use a Redis SET key per user to avoid duplicates
-    await this.redisService.set(`notif:queue:${userId}`, "1", { ttl: 3600 }); // 1h TTL
+  private async addToQueue(userId: string): Promise<void> {
+    try {
+      await this.redisService.sadd(this.QUEUE_SET_KEY, userId);
+    } catch (err: any) {
+      this.logger.error(`Failed to add ${userId} to queue: ${err.message}`);
+    }
   }
 
   /**
-   * Drain queue — ping users who have pending notifications
-   * Only 1 ping per user, user fetches all pending from DB
+   * Drain queue: retry pinging users who were offline.
+   * For each queued userId:
+   * 1. Check if user has pending notifications in DB
+   * 2. If no pending → remove from queue (cleanup)
+   * 3. Try ping → if success → remove from queue (FE will fetch)
+   * 4. If still offline → keep in queue for next cycle
    */
   private async drainQueue(): Promise<void> {
     try {
-      // Get all queued user IDs from Redis
-      const keys = await this.redisService.keys("notif:queue:*");
-      if (!keys || keys.length === 0) return;
+      const userIds = await this.redisService.smembers(this.QUEUE_SET_KEY);
+      if (!userIds || userIds.length === 0) return;
 
-      for (const key of keys) {
-        const userId = key.replace("notif:queue:", "");
+      this.logger.debug(`Drain: ${userIds.length} user(s) in queue`);
 
-        // Check if user has pending notifications
-        const pendingCount = await this.notificationModel
-          .countDocuments({
-            $or: [{ userId }, { username: userId }],
-            status: NotificationStatus.PENDING,
-          })
-          .exec();
+      for (const userId of userIds) {
+        // Check if user still has pending notifications
+        const pendingCount = await this.notificationModel.countDocuments({
+          $or: [{ userId }, { username: userId }],
+          status: NotificationStatus.PENDING,
+        });
 
         if (pendingCount === 0) {
-          // No pending notifications — remove from queue
-          await this.redisService.del(key);
+          // No pending — cleanup queue
+          await this.redisService.srem(this.QUEUE_SET_KEY, userId);
+          this.logger.debug(`Drain: no pending for ${userId}, removed from queue`);
           continue;
         }
 
-        // Try ping user
-        const pinged = await this.pingUser(userId);
-        if (pinged) {
-          // User online — remove from queue, they will fetch from DB
-          await this.redisService.del(key);
-          this.logger.debug(
-            `Drain: pinged user ${userId}, they have ${pendingCount} pending notifications`,
+        // Try ping
+        const online = await this.tryPing(userId);
+        if (online) {
+          // User back online — remove from queue, FE will fetch pending
+          await this.redisService.srem(this.QUEUE_SET_KEY, userId);
+          this.logger.log(
+            `Drain: user ${userId} back online, pinged (${pendingCount} pending notifs)`,
           );
+        } else {
+          this.logger.debug(`Drain: user ${userId} still offline, keeping in queue`);
         }
-        // If user still offline — keep in queue for next drain cycle
       }
     } catch (err: any) {
       this.logger.error(`Drain queue error: ${err.message}`);
