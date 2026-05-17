@@ -1,4 +1,9 @@
-import { Injectable, Logger, OnModuleInit, OnModuleDestroy } from "@nestjs/common";
+import {
+  Injectable,
+  Logger,
+  OnModuleInit,
+  OnModuleDestroy,
+} from "@nestjs/common";
 import { InjectModel } from "@nestjs/mongoose";
 import { Model } from "mongoose";
 import {
@@ -205,7 +210,8 @@ export class NotificationService implements OnModuleInit, OnModuleDestroy {
         { timeout: 3000 },
       );
       return response.data?.delivered ?? false;
-    } catch {
+    } catch (err: any) {
+      this.logger.debug(`Ping ${target} failed: ${err.code || err.message}`);
       return false;
     }
   }
@@ -215,19 +221,18 @@ export class NotificationService implements OnModuleInit, OnModuleDestroy {
    */
   private async addToQueue(userId: string): Promise<void> {
     try {
-      await this.redisService.sadd(this.QUEUE_SET_KEY, userId);
+      const added = await this.redisService.sadd(this.QUEUE_SET_KEY, userId);
+      this.logger.debug(`Added ${userId} to queue (sadd result: ${added})`);
     } catch (err: any) {
       this.logger.error(`Failed to add ${userId} to queue: ${err.message}`);
     }
   }
 
   /**
-   * Drain queue: retry pinging users who were offline.
-   * For each queued userId:
-   * 1. Check if user has pending notifications in DB
-   * 2. If no pending → remove from queue (cleanup)
-   * 3. Try ping → if success → remove from queue (FE will fetch)
-   * 4. If still offline → keep in queue for next cycle
+   * Drain queue: for each queued userId, try to ping.
+   * If ping succeeds (user online) → remove from queue so FE can fetch from DB.
+   * If ping fails → keep in queue for next cycle.
+   * No need to check online/offline — just ping and let WS gateway handle it.
    */
   private async drainQueue(): Promise<void> {
     try {
@@ -236,30 +241,28 @@ export class NotificationService implements OnModuleInit, OnModuleDestroy {
 
       this.logger.debug(`Drain: ${userIds.length} user(s) in queue`);
 
-      for (const userId of userIds) {
-        // Check if user still has pending notifications
+      for (const target of userIds) {
+        // Check if user still has pending notifications in DB
         const pendingCount = await this.notificationModel.countDocuments({
-          $or: [{ userId }, { username: userId }],
+          $or: [{ userId: target }, { username: target }],
           status: NotificationStatus.PENDING,
         });
 
         if (pendingCount === 0) {
           // No pending — cleanup queue
-          await this.redisService.srem(this.QUEUE_SET_KEY, userId);
-          this.logger.debug(`Drain: no pending for ${userId}, removed from queue`);
+          await this.redisService.srem(this.QUEUE_SET_KEY, target);
           continue;
         }
 
-        // Try ping
-        const online = await this.tryPing(userId);
-        if (online) {
-          // User back online — remove from queue, FE will fetch pending
-          await this.redisService.srem(this.QUEUE_SET_KEY, userId);
+        // Try ping — just send, don't care about result
+        // If user is online, WS gateway emits event → FE fetches from DB
+        // If user offline, ping fails silently → keep in queue for next cycle
+        const delivered = await this.tryPing(target);
+        if (delivered) {
+          await this.redisService.srem(this.QUEUE_SET_KEY, target);
           this.logger.log(
-            `Drain: user ${userId} back online, pinged (${pendingCount} pending notifs)`,
+            `Drain: pinged user ${target} (${pendingCount} pending notifs)`,
           );
-        } else {
-          this.logger.debug(`Drain: user ${userId} still offline, keeping in queue`);
         }
       }
     } catch (err: any) {
