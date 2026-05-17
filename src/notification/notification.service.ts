@@ -177,6 +177,17 @@ export class NotificationService implements OnModuleInit, OnModuleDestroy {
     return { notifications, total };
   }
 
+  /**
+   * Get number of users in the notification queue.
+   */
+  async getQueueSize(): Promise<number> {
+    try {
+      return await this.redisService.scard(this.QUEUE_SET_KEY);
+    } catch {
+      return 0;
+    }
+  }
+
   // ─── Private ──────────────────────────────────────────────
 
   /**
@@ -230,9 +241,9 @@ export class NotificationService implements OnModuleInit, OnModuleDestroy {
 
   /**
    * Drain queue: for each queued userId, try to ping.
-   * If ping succeeds (user online) → remove from queue so FE can fetch from DB.
-   * If ping fails → keep in queue for next cycle.
-   * No need to check online/offline — just ping and let WS gateway handle it.
+   * - If ping succeeds (user online) → remove from queue, FE will fetch from DB.
+   * - If ping fails (user offline) → remove from queue too, skip it.
+   *   User will fetch pending notifications on next login/reconnect.
    */
   private async drainQueue(): Promise<void> {
     try {
@@ -254,14 +265,19 @@ export class NotificationService implements OnModuleInit, OnModuleDestroy {
           continue;
         }
 
-        // Try ping — just send, don't care about result
-        // If user is online, WS gateway emits event → FE fetches from DB
-        // If user offline, ping fails silently → keep in queue for next cycle
+        // Try ping — if user online, WS gateway emits event → FE fetches from DB
         const delivered = await this.tryPing(target);
+        // Always remove from queue after attempt:
+        // - delivered: user got the ping, FE will fetch → remove
+        // - not delivered: user offline, skip → remove (user fetches on reconnect)
+        await this.redisService.srem(this.QUEUE_SET_KEY, target);
         if (delivered) {
-          await this.redisService.srem(this.QUEUE_SET_KEY, target);
           this.logger.log(
             `Drain: pinged user ${target} (${pendingCount} pending notifs)`,
+          );
+        } else {
+          this.logger.debug(
+            `Drain: user ${target} offline, skipped (will fetch on reconnect)`,
           );
         }
       }

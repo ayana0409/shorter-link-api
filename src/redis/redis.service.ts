@@ -560,14 +560,10 @@ export class RedisService {
   }
 
   /**
-   * Get pending notification count
+   * Get pending notification count (users in queue)
    */
   async getPendingNotificationCount(): Promise<number> {
-    const listCount = await this.client.lLen(this.NOTIFICATION_QUEUE_KEY);
-    const dedupKeys = await this.keys(
-      `${this.NOTIFICATION_DEDUP_QUEUE_PREFIX}*`,
-    );
-    return listCount + dedupKeys.length;
+    return await this.scard("notif:queued_users");
   }
 
   /**
@@ -824,14 +820,12 @@ export class RedisService {
     dedupKeyCount: number;
     total: number;
   }> {
-    const listCount = await this.client.lLen(this.NOTIFICATION_QUEUE_KEY);
-    const dedupKeys = await this.keys(
-      `${this.NOTIFICATION_DEDUP_QUEUE_PREFIX}*`,
-    );
+    // Read from the new SET-based queue (notif:queued_users)
+    const queuedUsers = await this.smembers("notif:queued_users");
     return {
-      listCount,
-      dedupKeyCount: dedupKeys.length,
-      total: listCount + dedupKeys.length,
+      listCount: 0,
+      dedupKeyCount: queuedUsers.length,
+      total: queuedUsers.length,
     };
   }
 }

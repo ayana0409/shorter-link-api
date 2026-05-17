@@ -73,4 +73,16 @@ export class NotificationController {
   markAsRead(@Body() body: { userId: string }) {
     return this.notificationService.markAsRead(body.userId);
   }
+
+  /**
+   * Get notification queue health info
+   * GET /notifications/queue-health
+   */
+  @Get("queue-health")
+  @UseGuards(AdminGuard)
+  @HttpCode(HttpStatus.OK)
+  async getQueueHealth() {
+    const queueSize = await this.notificationService.getQueueSize();
+    return { queueSize };
+  }
 }
