@@ -1,11 +1,36 @@
 services:
-  chatdb:
-    image: mongo
-    container_name: shorterlinkdb
+  # Backend application service running Node.js 22 LTS (patched against October vulnerabilities)
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: shorterlink-backend
+    restart: unless-stopped
     ports:
-      - "27017:27017" 
+      - "3001:3001"
+    environment:
+      - NODE_ENV=production
+    depends_on:
+      - chatdb
+      - redis
+
+  # MongoDB database
+  chatdb:
+    image: mongo:7
+    container_name: shorterlinkdb
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
     volumes:
       - mongo-data:/data/db
 
+  # Redis service for caching and rate limiting
+  redis:
+    image: redis:alpine
+    container_name: shorterlink-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+
 volumes:
-  mongo-data: 
+  mongo-data:

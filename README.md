@@ -105,7 +105,7 @@ Client Request
 | **Jest**            | ^29.7.0             | Unit testing                         |
 | **Supertest**       | ^7.0.0              | E2E testing                          |
 | **ESLint**          | ^9.18.0             | Linting                              |
-| **Docker**          | node:20-slim        | Containerization                     |
+| **Docker**          | node:22-slim        | Containerization                     |
 
 ### Kỹ thuật & Patterns
 

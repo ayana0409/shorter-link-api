@@ -1,5 +1,6 @@
 # Build stage
-FROM node:20-slim AS builder
+# Upgraded to Node 22 LTS (node:22-slim) to resolve October security vulnerabilities (CVE-2026-111497 Brotli RCE / Node2Shell)
+FROM node:22-slim AS builder
 WORKDIR /usr/src/app
 
 # Install dependencies
@@ -11,7 +12,7 @@ COPY . .
 RUN npm run build
 
 # Runtime stage
-FROM node:20-slim AS runner
+FROM node:22-slim AS runner
 WORKDIR /usr/src/app
 
 COPY package*.json ./
