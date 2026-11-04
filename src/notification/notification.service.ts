@@ -6,11 +6,12 @@ import {
   OnModuleDestroy,
 } from "@nestjs/common";
 import { InjectModel } from "@nestjs/mongoose";
-import { Model } from "mongoose";
+import { Model, Types } from "mongoose";
 import {
   Notification,
   NotificationStatus,
 } from "./schemas/notification.schema";
+import { Account, AccountDocument } from "../account/schemas/account.schema";
 import { RedisService } from "../redis/redis.service";
 import { ConfigManagerService } from "../config/config-manager.service";
 import {
@@ -28,7 +29,9 @@ export class NotificationService implements OnModuleInit, OnModuleDestroy {
 
   constructor(
     @InjectModel(Notification.name)
-    private notificationModel: Model<Notification>,
+    private readonly notificationModel: Model<Notification>,
+    @InjectModel(Account.name)
+    private readonly accountModel: Model<AccountDocument>,
     private readonly redisService: RedisService,
     private readonly configManager: ConfigManagerService,
     @Inject(NOTIFICATION_PROVIDER)
@@ -49,9 +52,46 @@ export class NotificationService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
+   * Helper: Resolve target user identifier into both MongoDB ObjectId string and username.
+   * Ensures notifications can always be mapped and found regardless of whether ObjectId or username is used.
+   */
+  private async resolveUserIdentifiers(
+    target: string,
+    fallbackUsername?: string,
+  ): Promise<{ userId: string; username: string }> {
+    if (!target) {
+      return { userId: target, username: fallbackUsername || target };
+    }
+
+    try {
+      if (Types.ObjectId.isValid(target)) {
+        const acc = await this.accountModel.findById(target).lean().exec();
+        if (acc) {
+          return { userId: acc._id.toString(), username: acc.username };
+        }
+      }
+
+      // If not an ObjectId or not found by id, look up by username
+      const acc = await this.accountModel
+        .findOne({ username: target })
+        .lean()
+        .exec();
+      if (acc) {
+        return { userId: acc._id.toString(), username: acc.username };
+      }
+    } catch (err: any) {
+      this.logger.debug(
+        `Could not resolve account for ${target}: ${err.message}`,
+      );
+    }
+
+    return { userId: target, username: fallbackUsername || target };
+  }
+
+  /**
    * Send a notification:
-   * 1. Persist to DB (status: pending)
-   * 2. Try ping via configured provider (WS or QuickNotify) — if success, FE will fetch from DB
+   * 1. Resolve and persist to DB with both userId and username (status: pending)
+   * 2. Try ping via configured provider (WS or QuickNotify)
    * 3. If ping fails (provider offline / user offline) → add userId to Redis queue
    * 4. Drain queue periodically retries; on success removes userId from queue
    */
@@ -61,30 +101,36 @@ export class NotificationService implements OnModuleInit, OnModuleDestroy {
     payload: Record<string, any>,
     username?: string,
   ): Promise<Notification> {
+    const resolved = await this.resolveUserIdentifiers(userId, username);
+
     // 1. Persist to DB
     const notification = await this.notificationModel.create({
-      userId,
-      username: username || null,
+      userId: resolved.userId,
+      username: resolved.username,
       event,
       payload,
       status: NotificationStatus.PENDING,
     });
 
-    // 2. Try ping user via notification provider
-    const online = await this.tryPingUser(userId, username);
+    // 2. Try ping user via notification provider (passes both userId and username)
+    const online = await this.tryPingUser(
+      resolved.userId,
+      resolved.username,
+      event,
+      payload,
+    );
     if (online) {
       this.logger.debug(
-        `User ${userId} pinged successfully — FE will fetch pending from DB`,
+        `User ${resolved.userId} (${resolved.username}) pinged successfully — FE will fetch pending from DB`,
       );
-      // Notification stays pending — FE fetches and marks as read
     } else {
       // 3. User offline or provider unreachable → add to Redis queue for retry
-      await this.addToQueue(userId);
-      if (username && username !== userId) {
-        await this.addToQueue(username);
+      await this.addToQueue(resolved.userId);
+      if (resolved.username && resolved.username !== resolved.userId) {
+        await this.addToQueue(resolved.username);
       }
       this.logger.debug(
-        `User ${userId} offline / provider unreachable, queued notification ${notification._id} (queued for drain)`,
+        `User ${resolved.userId} offline / provider unreachable, queued notification ${notification._id} (queued for drain)`,
       );
     }
 
@@ -120,10 +166,19 @@ export class NotificationService implements OnModuleInit, OnModuleDestroy {
 
   /**
    * Get pending notifications for a user (called by FE on login/reconnect)
+   * Searches by both ObjectId and username
    */
   async getPendingForUser(userId: string): Promise<Notification[]> {
+    const resolved = await this.resolveUserIdentifiers(userId);
+    const candidateIds = Array.from(
+      new Set([userId, resolved.userId, resolved.username].filter(Boolean)),
+    );
+
     const query = {
-      $or: [{ userId }, { username: userId }],
+      $or: [
+        { userId: { $in: candidateIds } },
+        { username: { $in: candidateIds } },
+      ],
       status: NotificationStatus.PENDING,
     };
     return this.notificationModel
@@ -137,9 +192,17 @@ export class NotificationService implements OnModuleInit, OnModuleDestroy {
    * Mark all pending as delivered
    */
   async markAsRead(userId: string): Promise<number> {
+    const resolved = await this.resolveUserIdentifiers(userId);
+    const candidateIds = Array.from(
+      new Set([userId, resolved.userId, resolved.username].filter(Boolean)),
+    );
+
     const result = await this.notificationModel.updateMany(
       {
-        $or: [{ userId }, { username: userId }],
+        $or: [
+          { userId: { $in: candidateIds } },
+          { username: { $in: candidateIds } },
+        ],
         status: NotificationStatus.PENDING,
       },
       { status: NotificationStatus.DELIVERED, deliveredAt: new Date() },
@@ -155,8 +218,18 @@ export class NotificationService implements OnModuleInit, OnModuleDestroy {
     page = 1,
     limit = 20,
   ): Promise<{ notifications: Notification[]; total: number }> {
+    const resolved = await this.resolveUserIdentifiers(userId);
+    const candidateIds = Array.from(
+      new Set([userId, resolved.userId, resolved.username].filter(Boolean)),
+    );
+
     const skip = (page - 1) * limit;
-    const filter = { $or: [{ userId }, { username: userId }] };
+    const filter = {
+      $or: [
+        { userId: { $in: candidateIds } },
+        { username: { $in: candidateIds } },
+      ],
+    };
     const [notifications, total] = await Promise.all([
       this.notificationModel
         .find(filter)
@@ -184,18 +257,19 @@ export class NotificationService implements OnModuleInit, OnModuleDestroy {
   // ─── Private ──────────────────────────────────────────────
 
   /**
-   * Try to ping a user via notification provider (empty payload — FE fetches from DB).
-   * Tries userId first, then username as fallback.
-   * Returns true only if provider confirms delivery or user is connected.
+   * Try to ping a user via notification provider.
+   * Dispatches to provider with both userId and username.
    */
   private async tryPingUser(
     userId: string,
     username?: string,
+    event = "new_notification",
+    payload: Record<string, any> = {},
   ): Promise<boolean> {
     return this.notificationProvider.sendToUser(
       userId,
-      "new_notification",
-      {},
+      event,
+      payload,
       username,
     );
   }
@@ -216,7 +290,6 @@ export class NotificationService implements OnModuleInit, OnModuleDestroy {
    * Drain queue: for each queued userId, try to ping.
    * - If ping succeeds (user online) → remove from queue, FE will fetch from DB.
    * - If ping fails (user offline) → remove from queue too, skip it.
-   *   User will fetch pending notifications on next login/reconnect.
    */
   private async drainQueue(): Promise<void> {
     try {
@@ -226,9 +299,17 @@ export class NotificationService implements OnModuleInit, OnModuleDestroy {
       this.logger.debug(`Drain: ${userIds.length} user(s) in queue`);
 
       for (const target of userIds) {
+        const resolved = await this.resolveUserIdentifiers(target);
+        const candidateIds = Array.from(
+          new Set([target, resolved.userId, resolved.username].filter(Boolean)),
+        );
+
         // Check if user still has pending notifications in DB
         const pendingCount = await this.notificationModel.countDocuments({
-          $or: [{ userId: target }, { username: target }],
+          $or: [
+            { userId: { $in: candidateIds } },
+            { username: { $in: candidateIds } },
+          ],
           status: NotificationStatus.PENDING,
         });
 
@@ -238,15 +319,14 @@ export class NotificationService implements OnModuleInit, OnModuleDestroy {
           continue;
         }
 
-        // Try ping — if user online, provider delivers event → FE fetches from DB
+        // Try ping
         const delivered = await this.notificationProvider.sendToUser(
-          target,
+          resolved.userId,
           "new_notification",
           {},
+          resolved.username,
         );
-        // Always remove from queue after attempt:
-        // - delivered: user got the ping, FE will fetch → remove
-        // - not delivered: user offline, skip → remove (user fetches on reconnect)
+
         await this.redisService.srem(this.QUEUE_SET_KEY, target);
         if (delivered) {
           this.logger.log(

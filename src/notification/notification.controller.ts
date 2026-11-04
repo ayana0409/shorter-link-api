@@ -43,8 +43,14 @@ export class NotificationController {
    * GET /notifications/pending
    */
   @Get("pending")
-  getPending(@Query("userId") userId: string) {
-    return this.notificationService.getPendingForUser(userId);
+  getPending(@Req() req: any, @Query("userId") userId?: string) {
+    const targetUserId =
+      userId ||
+      req.user?._id?.toString() ||
+      req.user?.id ||
+      req.user?.sub ||
+      req.user?.username;
+    return this.notificationService.getPendingForUser(targetUserId);
   }
 
   /**
@@ -53,23 +59,47 @@ export class NotificationController {
    */
   @Get("history")
   getHistory(
-    @Query("userId") userId: string,
+    @Req() req: any,
+    @Query("userId") userId?: string,
     @Query("page") page?: number,
     @Query("limit") limit?: number,
   ) {
-    return this.notificationService.getHistory(userId, page ?? 1, limit ?? 20);
+    const targetUserId =
+      userId ||
+      req.user?._id?.toString() ||
+      req.user?.id ||
+      req.user?.sub ||
+      req.user?.username;
+    return this.notificationService.getHistory(
+      targetUserId,
+      page ?? 1,
+      limit ?? 20,
+    );
   }
 
   /**
    * Send notification to a specific user
    * POST /notifications/send
-   * Body: { userId: string, event: string, payload: any }
+   * Body: { userId: string, event: string, payload: any, username?: string }
    */
   @Post("send")
   @UseGuards(AdminGuard)
   @HttpCode(HttpStatus.OK)
-  sendToUser(@Body() body: { userId: string; event: string; payload: any }) {
-    return this.notificationService.send(body.userId, body.event, body.payload);
+  sendToUser(
+    @Body()
+    body: {
+      userId: string;
+      event: string;
+      payload: any;
+      username?: string;
+    },
+  ) {
+    return this.notificationService.send(
+      body.userId,
+      body.event,
+      body.payload,
+      body.username,
+    );
   }
 
   /**
@@ -91,8 +121,14 @@ export class NotificationController {
    */
   @Post("mark-as-read")
   @HttpCode(HttpStatus.OK)
-  markAsRead(@Body() body: { userId: string }) {
-    return this.notificationService.markAsRead(body.userId);
+  markAsRead(@Req() req: any, @Body() body: { userId?: string }) {
+    const targetUserId =
+      body.userId ||
+      req.user?._id?.toString() ||
+      req.user?.id ||
+      req.user?.sub ||
+      req.user?.username;
+    return this.notificationService.markAsRead(targetUserId);
   }
 
   /**
