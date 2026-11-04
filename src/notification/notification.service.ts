@@ -1,5 +1,6 @@
 import {
   Injectable,
+  Inject,
   Logger,
   OnModuleInit,
   OnModuleDestroy,
@@ -12,12 +13,14 @@ import {
 } from "./schemas/notification.schema";
 import { RedisService } from "../redis/redis.service";
 import { ConfigManagerService } from "../config/config-manager.service";
-import axios from "axios";
+import {
+  INotificationProvider,
+  NOTIFICATION_PROVIDER,
+} from "./providers/notification.provider.interface";
 
 @Injectable()
 export class NotificationService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(NotificationService.name);
-  private wsBaseUrl: string = "http://localhost:3002";
   private drainInterval: NodeJS.Timeout | null = null;
 
   /** Redis set key — stores userIds that have pending notifications queued */
@@ -28,20 +31,14 @@ export class NotificationService implements OnModuleInit, OnModuleDestroy {
     private notificationModel: Model<Notification>,
     private readonly redisService: RedisService,
     private readonly configManager: ConfigManagerService,
+    @Inject(NOTIFICATION_PROVIDER)
+    private readonly notificationProvider: INotificationProvider,
   ) {}
 
   async onModuleInit() {
-    try {
-      this.wsBaseUrl = await this.configManager.getValue(
-        "WS_URL",
-        "http://localhost:3002",
-      );
-    } catch {
-      this.wsBaseUrl = "http://localhost:3002";
-    }
     // Drain queue every 10s — retry pinging users who were offline
     this.drainInterval = setInterval(() => this.drainQueue(), 10000);
-    this.logger.log(`NotificationService initialized (WS: ${this.wsBaseUrl})`);
+    this.logger.log("NotificationService initialized with notification provider");
   }
 
   onModuleDestroy() {
@@ -54,8 +51,8 @@ export class NotificationService implements OnModuleInit, OnModuleDestroy {
   /**
    * Send a notification:
    * 1. Persist to DB (status: pending)
-   * 2. Try ping via WebSocket — if success, FE will fetch from DB
-   * 3. If ping fails (WS offline / user offline) → add userId to Redis queue
+   * 2. Try ping via configured provider (WS or QuickNotify) — if success, FE will fetch from DB
+   * 3. If ping fails (provider offline / user offline) → add userId to Redis queue
    * 4. Drain queue periodically retries; on success removes userId from queue
    */
   async send(
@@ -73,21 +70,21 @@ export class NotificationService implements OnModuleInit, OnModuleDestroy {
       status: NotificationStatus.PENDING,
     });
 
-    // 2. Try ping user via WebSocket
+    // 2. Try ping user via notification provider
     const online = await this.tryPingUser(userId, username);
     if (online) {
       this.logger.debug(
-        `User ${userId} is online, pinged — FE will fetch pending from DB`,
+        `User ${userId} pinged successfully — FE will fetch pending from DB`,
       );
       // Notification stays pending — FE fetches and marks as read
     } else {
-      // 3. User offline or WS unreachable → add to Redis queue for retry
+      // 3. User offline or provider unreachable → add to Redis queue for retry
       await this.addToQueue(userId);
       if (username && username !== userId) {
         await this.addToQueue(username);
       }
       this.logger.debug(
-        `User ${userId} offline / WS unreachable, queued notification ${notification._id} (queued for drain)`,
+        `User ${userId} offline / provider unreachable, queued notification ${notification._id} (queued for drain)`,
       );
     }
 
@@ -115,11 +112,7 @@ export class NotificationService implements OnModuleInit, OnModuleDestroy {
    */
   async broadcast(event: string, payload: Record<string, any>): Promise<void> {
     try {
-      await axios.post(
-        `${this.wsBaseUrl}/notify/broadcast`,
-        { event, payload },
-        { timeout: 3000 },
-      );
+      await this.notificationProvider.broadcast(event, payload);
     } catch (err: any) {
       this.logger.warn(`Broadcast failed: ${err.message}`);
     }
@@ -191,40 +184,20 @@ export class NotificationService implements OnModuleInit, OnModuleDestroy {
   // ─── Private ──────────────────────────────────────────────
 
   /**
-   * Try to ping a user via WebSocket (empty payload — FE fetches from DB).
+   * Try to ping a user via notification provider (empty payload — FE fetches from DB).
    * Tries userId first, then username as fallback.
-   * Returns true only if WS gateway confirms user is connected.
+   * Returns true only if provider confirms delivery or user is connected.
    */
   private async tryPingUser(
     userId: string,
     username?: string,
   ): Promise<boolean> {
-    if (await this.tryPing(userId)) return true;
-    if (username && username !== userId) {
-      if (await this.tryPing(username)) return true;
-    }
-    return false;
-  }
-
-  /**
-   * Send ping to a single target via WS gateway.
-   */
-  private async tryPing(target: string): Promise<boolean> {
-    try {
-      const response = await axios.post(
-        `${this.wsBaseUrl}/notify/user`,
-        {
-          userId: target,
-          event: "new_notification",
-          payload: {},
-        },
-        { timeout: 3000 },
-      );
-      return response.data?.delivered ?? false;
-    } catch (err: any) {
-      this.logger.debug(`Ping ${target} failed: ${err.code || err.message}`);
-      return false;
-    }
+    return this.notificationProvider.sendToUser(
+      userId,
+      "new_notification",
+      {},
+      username,
+    );
   }
 
   /**
@@ -265,8 +238,12 @@ export class NotificationService implements OnModuleInit, OnModuleDestroy {
           continue;
         }
 
-        // Try ping — if user online, WS gateway emits event → FE fetches from DB
-        const delivered = await this.tryPing(target);
+        // Try ping — if user online, provider delivers event → FE fetches from DB
+        const delivered = await this.notificationProvider.sendToUser(
+          target,
+          "new_notification",
+          {},
+        );
         // Always remove from queue after attempt:
         // - delivered: user got the ping, FE will fetch → remove
         // - not delivered: user offline, skip → remove (user fetches on reconnect)

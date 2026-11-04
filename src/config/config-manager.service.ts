@@ -119,12 +119,35 @@ export class ConfigManagerService implements OnModuleInit {
         description: "Maximum number of requests within the rate limit window",
         type: "number",
       },
-      // ─── WebSocket ───────────────────────────────────────────
+      // ─── WebSocket & Notifications ───────────────────────────
+      {
+        key: "NOTIFICATION_PROVIDER",
+        value:
+          this.configService.get<string>("NOTIFICATION_PROVIDER") || "websocket",
+        description: "Active notification provider: websocket or quicknotify",
+        type: "string",
+      },
       {
         key: "WS_URL",
         value:
           this.configService.get<string>("WS_URL") || "http://localhost:3002",
         description: "WebSocket server URL for notifications",
+        type: "string",
+        isHidden: true,
+      },
+      {
+        key: "QUICKNOTIFY_URL",
+        value:
+          this.configService.get<string>("QUICKNOTIFY_URL") ||
+          "http://localhost:8080",
+        description: "QuickNotify server base URL",
+        type: "string",
+      },
+      {
+        key: "QUICKNOTIFY_JWT_SECRET",
+        value:
+          this.configService.get<string>("QUICKNOTIFY_JWT_SECRET") || "changeme",
+        description: "Shared secret for signing QuickNotify JWT tokens",
         type: "string",
         isHidden: true,
       },

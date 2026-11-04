@@ -4,18 +4,39 @@ import {
   Post,
   Body,
   Query,
+  Req,
   UseGuards,
   HttpCode,
   HttpStatus,
 } from "@nestjs/common";
 import { NotificationService } from "./notification.service";
+import { QuickNotifyTokenService } from "./quicknotify-token.service";
 import { AuthGuard } from "../auth/auth.guard";
 import { AdminGuard } from "../auth/admin.guard";
 
 @Controller("notifications")
 @UseGuards(AuthGuard)
 export class NotificationController {
-  constructor(private readonly notificationService: NotificationService) {}
+  constructor(
+    private readonly notificationService: NotificationService,
+    private readonly quickNotifyTokenService: QuickNotifyTokenService,
+  ) {}
+
+  /**
+   * Get short-lived token for QuickNotify WebSocket connection
+   * GET /notifications/qn-token
+   */
+  @Get("qn-token")
+  @HttpCode(HttpStatus.OK)
+  async getQuickNotifyToken(@Req() req: any) {
+    const userId =
+      req.user?._id?.toString() ||
+      req.user?.id ||
+      req.user?.sub ||
+      req.user?.username;
+    const token = await this.quickNotifyTokenService.generateToken(userId);
+    return { token };
+  }
 
   /**
    * Get pending notifications for current user

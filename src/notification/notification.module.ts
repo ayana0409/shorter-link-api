@@ -9,6 +9,11 @@ import {
 import { AuthModule } from "../auth/auth.module";
 import { AccountModule } from "../account/account.module";
 import { RedisModule } from "../redis/redis.module";
+import { WebSocketProvider } from "./providers/websocket.provider";
+import { QuickNotifyProvider } from "./providers/quicknotify.provider";
+import { NOTIFICATION_PROVIDER } from "./providers/notification.provider.interface";
+import { QuickNotifyTokenService } from "./quicknotify-token.service";
+import { ConfigManagerService } from "../config/config-manager.service";
 
 @Module({
   imports: [
@@ -20,7 +25,26 @@ import { RedisModule } from "../redis/redis.module";
     RedisModule,
   ],
   controllers: [NotificationController],
-  providers: [NotificationService],
-  exports: [NotificationService, MongooseModule],
+  providers: [
+    WebSocketProvider,
+    QuickNotifyProvider,
+    QuickNotifyTokenService,
+    {
+      provide: NOTIFICATION_PROVIDER,
+      useFactory: (
+        configManager: ConfigManagerService,
+        wsProvider: WebSocketProvider,
+        qnProvider: QuickNotifyProvider,
+      ) => {
+        const providerType = (
+          process.env.NOTIFICATION_PROVIDER || "websocket"
+        ).toLowerCase();
+        return providerType === "quicknotify" ? qnProvider : wsProvider;
+      },
+      inject: [ConfigManagerService, WebSocketProvider, QuickNotifyProvider],
+    },
+    NotificationService,
+  ],
+  exports: [NotificationService, MongooseModule, QuickNotifyTokenService],
 })
 export class NotificationModule {}
