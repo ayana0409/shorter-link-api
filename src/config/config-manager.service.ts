@@ -17,7 +17,7 @@ export class ConfigManagerService implements OnModuleInit {
     private configService: NestConfigService,
     private i18n: I18nService,
     private moduleRef: ModuleRef,
-  ) {}
+  ) { }
 
   async onModuleInit() {
     await this.initializeDefaultConfigs();
@@ -148,6 +148,15 @@ export class ConfigManagerService implements OnModuleInit {
         value:
           this.configService.get<string>("QUICKNOTIFY_JWT_SECRET") || "changeme",
         description: "Shared secret for signing QuickNotify JWT tokens",
+        type: "string",
+        isHidden: true,
+      },
+      {
+        key: "QUICKNOTIFY_API_KEY",
+        value:
+          this.configService.get<string>("QUICKNOTIFY_API_KEY") ||
+          "default-key",
+        description: "API Key for authenticating publish requests to QuickNotify",
         type: "string",
         isHidden: true,
       },

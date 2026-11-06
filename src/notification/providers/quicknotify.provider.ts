@@ -27,9 +27,10 @@ interface QuickNotifyEnvelope {
 export class QuickNotifyProvider implements INotificationProvider, OnModuleInit {
   private readonly logger = new Logger(QuickNotifyProvider.name);
   private quickNotifyUrl = 'http://localhost:8080';
+  private quickNotifyApiKey = 'default-key';
   private readonly PROJECT_ID = 'shorterlink';
 
-  constructor(private readonly configManager: ConfigManagerService) {}
+  constructor(private readonly configManager: ConfigManagerService) { }
 
   async onModuleInit() {
     try {
@@ -39,11 +40,41 @@ export class QuickNotifyProvider implements INotificationProvider, OnModuleInit 
           'QUICKNOTIFY_URL',
           'http://localhost:8080',
         ));
+      this.quickNotifyApiKey =
+        process.env.QUICKNOTIFY_API_KEY ||
+        (await this.configManager.getValue(
+          'QUICKNOTIFY_API_KEY',
+          'default-key',
+        ));
     } catch {
       this.quickNotifyUrl =
         process.env.QUICKNOTIFY_URL || 'http://localhost:8080';
+      this.quickNotifyApiKey =
+        process.env.QUICKNOTIFY_API_KEY || 'default-key';
     }
     this.logger.log(`QuickNotifyProvider initialized with URL: ${this.quickNotifyUrl}`);
+  }
+
+  /**
+   * Internal helper: Resolves headers with X-API-Key for QuickNotify authentication
+   */
+  private async getHeaders(): Promise<Record<string, string>> {
+    let apiKey = process.env.QUICKNOTIFY_API_KEY;
+    if (!apiKey) {
+      try {
+        apiKey = await this.configManager.getValue(
+          'QUICKNOTIFY_API_KEY',
+          this.quickNotifyApiKey,
+        );
+      } catch {
+        apiKey = this.quickNotifyApiKey;
+      }
+    }
+
+    return {
+      'Content-Type': 'application/json',
+      'X-API-Key': apiKey || this.quickNotifyApiKey,
+    };
   }
 
   /**
@@ -75,18 +106,22 @@ export class QuickNotifyProvider implements INotificationProvider, OnModuleInit 
     };
 
     try {
+      const headers = await this.getHeaders();
       const response = await axios.post(
         `${this.quickNotifyUrl}/api/v1/notify`,
         envelope,
         {
           timeout: 3000,
-          headers: { 'Content-Type': 'application/json' },
+          headers,
         },
       );
       return response.status >= 200 && response.status < 300;
     } catch (err: any) {
+      const status = err.response?.status;
+      const data = err.response?.data;
       this.logger.warn(
-        `QuickNotify dispatch failed for ${targetId}: ${err.message}`,
+        `QuickNotify dispatch failed for ${targetId} [HTTP ${status || 'ERR'}]: ${data || err.message
+        }`,
       );
       return false;
     }
@@ -114,6 +149,9 @@ export class QuickNotifyProvider implements INotificationProvider, OnModuleInit 
     return res1 || res2;
   }
 
+  /**
+   * Broadcast notification to all connected users under shorterlink project
+   */
   async broadcast(event: string, payload: Record<string, any>): Promise<void> {
     const eventId = `evt_sl_broadcast_${uuidv4 ? uuidv4() : Date.now()}`;
     const envelope: QuickNotifyEnvelope = {
@@ -137,16 +175,22 @@ export class QuickNotifyProvider implements INotificationProvider, OnModuleInit 
       this.logger.log(
         `Broadcasting project_global notification ${eventId} to QuickNotify`,
       );
+      const headers = await this.getHeaders();
       await axios.post(
         `${this.quickNotifyUrl}/api/v1/notify`,
         envelope,
         {
           timeout: 3000,
-          headers: { 'Content-Type': 'application/json' },
+          headers,
         },
       );
     } catch (err: any) {
-      this.logger.warn(`QuickNotify broadcast failed: ${err.message}`);
+      const status = err.response?.status;
+      const data = err.response?.data;
+      this.logger.warn(
+        `QuickNotify broadcast failed [HTTP ${status || 'ERR'}]: ${data || err.message
+        }`,
+      );
     }
   }
 }

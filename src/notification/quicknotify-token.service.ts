@@ -10,11 +10,11 @@ export class QuickNotifyTokenService {
   constructor(
     private readonly jwtService: JwtService,
     private readonly configManager: ConfigManagerService,
-  ) {}
+  ) { }
 
   /**
-   * Generate a signed HS256 JWT for QuickNotify WebSocket authentication.
-   * Claims include project_id, user_id, and exp timestamp.
+   * Generate a signed HS256 JWT for QuickNotify WebSocket entry authentication.
+   * Claims include project_id, user_id, and sub to grant WebSocket entry ticket for Frontend.
    */
   async generateToken(
     userId: string,
@@ -31,6 +31,7 @@ export class QuickNotifyTokenService {
     const payload = {
       project_id: this.PROJECT_ID,
       user_id: userId,
+      sub: userId,
     };
 
     this.logger.debug(
