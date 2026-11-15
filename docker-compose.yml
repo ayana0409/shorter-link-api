@@ -1,36 +1,32 @@
 services:
-  # Backend application service running Node.js 22 LTS (patched against October vulnerabilities)
-  backend:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: shorterlink-backend
+  shorter-link-api:
+    build: .
+    container_name: shorter-link-api
     restart: unless-stopped
-    ports:
-      - "3001:3001"
-    environment:
-      - NODE_ENV=production
-    depends_on:
-      - chatdb
-      - redis
+    networks:
+      - internal-net
+      - proxy-net
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 512M
+        reservations:
+          cpus: "0.1"
+          memory: 64M
+    env_file:
+      - .env
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=proxy-net
+      - traefik.http.routers.shorter-link.rule=(Host(`thuandd.io.vn`) || Host(`traefik`)) && PathPrefix(`/shorter-link-api`)
+      - traefik.http.routers.shorter-link.entrypoints=web
+      - traefik.http.services.shorter-link.loadbalancer.server.port=3001
+      - traefik.http.routers.shorter-link.middlewares=shorter-link-strip
+      - traefik.http.middlewares.shorter-link-strip.stripprefix.prefixes=/shorter-link-api
 
-  # MongoDB database
-  chatdb:
-    image: mongo:7
-    container_name: shorterlinkdb
-    restart: unless-stopped
-    ports:
-      - "27017:27017"
-    volumes:
-      - mongo-data:/data/db
-
-  # Redis service for caching and rate limiting
-  redis:
-    image: redis:alpine
-    container_name: shorterlink-redis
-    restart: unless-stopped
-    ports:
-      - "6379:6379"
-
-volumes:
-  mongo-data:
+networks:
+  proxy-net:
+    external: true
+  internal-net:
+    external: true
