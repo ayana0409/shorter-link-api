@@ -10,6 +10,10 @@ import {
   Req,
   UseGuards,
   Query,
+  Inject,
+  forwardRef,
+  HttpCode,
+  HttpStatus,
 } from "@nestjs/common";
 import { GroupService } from "./group.service";
 import {
@@ -17,6 +21,7 @@ import {
   UpdateGroupDto,
   AddLinksToGroupDto,
   AddGroupMemberDto,
+  RespondGroupInvitationDto,
 } from "./dto/group.dto";
 import { Group } from "./schemas/group.schema";
 import { AuthGuard } from "../auth/auth.guard";
@@ -28,6 +33,7 @@ import { ShortenerService } from "../shortener/shortener.service";
 export class GroupController {
   constructor(
     private readonly groupService: GroupService,
+    @Inject(forwardRef(() => ShortenerService))
     private readonly shortenerService: ShortenerService,
   ) {}
 
@@ -43,6 +49,16 @@ export class GroupController {
   @Get()
   async findAll(@Req() req: any) {
     return this.groupService.findAll(this.getRequestUserId(req));
+  }
+
+  @Get("invitations/me")
+  async getMyInvitations(@Req() req: any) {
+    return this.groupService.getMyInvitations(this.getRequestUserId(req));
+  }
+
+  @Get("invitations/sent")
+  async getSentInvitations(@Req() req: any) {
+    return this.groupService.getSentInvitations(this.getRequestUserId(req));
   }
 
   @Get(":id")
@@ -104,13 +120,17 @@ export class GroupController {
       id,
       addMemberDto.userId,
       addMemberDto.role,
-      req.user._id,
+      this.getRequestUserId(req),
     );
   }
 
   @Get(":id/members")
   async getMembers(@Param("id") id: string, @Req() req: any) {
-    return this.groupService.getMembers(id, req.user._id, req.user?.role);
+    return this.groupService.getMembers(
+      id,
+      this.getRequestUserId(req),
+      req.user?.role,
+    );
   }
 
   @Delete(":id/members/:memberId")
@@ -122,7 +142,43 @@ export class GroupController {
     return this.groupService.removeMember(
       id,
       memberId,
-      req.user._id,
+      this.getRequestUserId(req),
+      req.user?.role,
+    );
+  }
+
+  @Post(":id/leave")
+  @HttpCode(HttpStatus.OK)
+  async leaveGroup(@Param("id") id: string, @Req() req: any) {
+    return this.groupService.leaveGroup(
+      id,
+      this.getRequestUserId(req),
+    );
+  }
+
+  @Post(":id/invitations/respond")
+  async respondToInvitation(
+    @Param("id") id: string,
+    @Body() dto: RespondGroupInvitationDto,
+    @Req() req: any,
+  ) {
+    return this.groupService.respondToInvitation(
+      id,
+      this.getRequestUserId(req),
+      dto.action,
+    );
+  }
+
+  @Delete(":id/invitations/:targetUserId")
+  async cancelInvitation(
+    @Param("id") id: string,
+    @Param("targetUserId") targetUserId: string,
+    @Req() req: any,
+  ) {
+    return this.groupService.cancelInvitation(
+      id,
+      targetUserId,
+      this.getRequestUserId(req),
       req.user?.role,
     );
   }
@@ -133,7 +189,11 @@ export class GroupController {
     @Body() addLinksDto: AddLinksToGroupDto,
     @Req() req: any,
   ) {
-    return this.groupService.addLinks(id, addLinksDto.links, req.user._id);
+    return this.groupService.addLinks(
+      id,
+      addLinksDto.links,
+      this.getRequestUserId(req),
+    );
   }
 
   @Delete(":id/links/:linkId")
@@ -145,7 +205,7 @@ export class GroupController {
     return this.groupService.removeLink(
       id,
       linkId,
-      req.user._id,
+      this.getRequestUserId(req),
       req.user?.role,
     );
   }
@@ -165,7 +225,7 @@ export class GroupController {
     const limitNumber = Number(limit) || 5;
     return this.groupService.getLinks(
       id,
-      req.user._id,
+      this.getRequestUserId(req),
       req.user?.role,
       search,
       status,

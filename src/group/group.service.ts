@@ -1,24 +1,31 @@
-import { Injectable } from "@nestjs/common";
-import { InjectModel } from "@nestjs/mongoose";
-import { Model, Types } from "mongoose";
-import { Group, GroupDocument } from "./schemas/group.schema";
-import { CreateGroupDto, UpdateGroupDto } from "./dto/group.dto";
 import {
+  Injectable,
+  Inject,
+  forwardRef,
   NotFoundException,
   ForbiddenException,
   BadRequestException,
 } from "@nestjs/common";
+import { InjectModel } from "@nestjs/mongoose";
+import { Model, Types } from "mongoose";
+import { Group, GroupDocument } from "./schemas/group.schema";
+import { CreateGroupDto, UpdateGroupDto } from "./dto/group.dto";
 import { ShortenerService } from "../shortener/shortener.service";
 import { AccountService } from "../account/account.service";
 import { AccountDocument } from "../account/schemas/account.schema";
 import { I18nService } from "../common/i18n";
+import { NotificationService } from "../notification/notification.service";
 
 @Injectable()
 export class GroupService {
   constructor(
     @InjectModel(Group.name) private groupModel: Model<GroupDocument>,
+    @Inject(forwardRef(() => ShortenerService))
     private readonly shortenerService: ShortenerService,
+    @Inject(forwardRef(() => AccountService))
     private readonly accountService: AccountService,
+    @Inject(forwardRef(() => NotificationService))
+    private readonly notificationService: NotificationService,
     private i18n: I18nService,
   ) {}
 
@@ -31,6 +38,27 @@ export class GroupService {
 
   private isAdminRole(role?: string): boolean {
     return role === "admin";
+  }
+
+  /**
+   * Cleanup all group memberships and invitations for a deleted account
+   */
+  async cleanupAccountReferences(accountId: string): Promise<void> {
+    const accountObjectId = new Types.ObjectId(accountId);
+    await this.groupModel.updateMany(
+      {
+        $or: [
+          { "members.account": accountObjectId },
+          { "invitations.account": accountObjectId },
+        ],
+      },
+      {
+        $pull: {
+          members: { account: accountObjectId },
+          invitations: { account: accountObjectId },
+        },
+      },
+    );
   }
 
   async findByAccountId(
@@ -105,6 +133,8 @@ export class GroupService {
       .findById(id)
       .populate("owner", "username fullname")
       .populate("members.account", "username fullname")
+      .populate("invitations.account", "username fullname")
+      .populate("invitations.invitedBy", "username fullname")
       .populate("links", "originalUrl shortUrl siteName")
       .exec();
 
@@ -238,6 +268,10 @@ export class GroupService {
     const group = await this.findOne(groupId, actorId);
     const targetAccountId = await this.resolveAccountId(userIdToAdd);
 
+    if (targetAccountId === actorId) {
+      throw new BadRequestException(this.msg("group.CANNOT_INVITE_SELF"));
+    }
+
     const actorRole = this.getMemberRole(group, actorId);
     if (!actorRole || (actorRole !== "owner" && actorRole !== "manager")) {
       throw new ForbiddenException(this.msg("group.ONLY_OWNER_OR_MANAGER_ADD"));
@@ -250,6 +284,7 @@ export class GroupService {
       );
     }
 
+    // 1. If target is already a confirmed member
     const existingMember = group.members.find(
       (member) => this.getEntityId(member.account) === targetAccountId,
     );
@@ -263,7 +298,7 @@ export class GroupService {
       }
       await this.groupModel.updateOne(
         {
-          _id: groupId,
+          _id: new Types.ObjectId(groupId),
           "members.account": new Types.ObjectId(targetAccountId),
         },
         { $set: { "members.$.role": targetRole } },
@@ -271,24 +306,264 @@ export class GroupService {
       return this.findOne(groupId, actorId);
     }
 
-    // Check max members per group limit before adding (based on group owner's level)
+    // 2. If target already has a pending invitation
+    const existingInvite = group.invitations?.find(
+      (inv) => this.getEntityId(inv.account) === targetAccountId,
+    );
+
+    if (existingInvite) {
+      if (existingInvite.role === targetRole) {
+        throw new BadRequestException(this.msg("group.ALREADY_INVITED"));
+      }
+      if (!this.isOwner(group, actorId)) {
+        throw new ForbiddenException(this.msg("group.ONLY_OWNER_CHANGE_ROLE"));
+      }
+      await this.groupModel.updateOne(
+        {
+          _id: new Types.ObjectId(groupId),
+          "invitations.account": new Types.ObjectId(targetAccountId),
+        },
+        { $set: { "invitations.$.role": targetRole } },
+      );
+      return this.findOne(groupId, actorId);
+    }
+
+    // 3. Check group member capacity (counting current members + pending invitations)
     const ownerId = this.getEntityId(group.owner);
     const maxMembersPerGroup =
       await this.shortenerService.getMaxMembersPerGroup(ownerId);
-    const totalMembers = group.members.length + 1; // +1 for the new member being added
+    const totalCount =
+      group.members.length + (group.invitations?.length || 0) + 1;
 
-    if (totalMembers > maxMembersPerGroup) {
+    if (totalCount > maxMembersPerGroup) {
       throw new BadRequestException(
         this.msg("group.MAX_MEMBERS_REACHED", maxMembersPerGroup),
       );
     }
 
-    await this.groupModel.findByIdAndUpdate(
-      groupId,
+    // 4. Atomic append to invitations with duplicate prevention
+    const targetAccountObjectId = new Types.ObjectId(targetAccountId);
+    const actorObjectId = new Types.ObjectId(actorId);
+
+    const updateResult = await this.groupModel.updateOne(
+      {
+        _id: new Types.ObjectId(groupId),
+        "members.account": { $ne: targetAccountObjectId },
+        "invitations.account": { $ne: targetAccountObjectId },
+      },
       {
         $push: {
+          invitations: {
+            account: targetAccountObjectId,
+            role: targetRole,
+            invitedBy: actorObjectId,
+            invitedAt: new Date(),
+          },
+        },
+      },
+    );
+
+    if (updateResult.matchedCount === 0) {
+      const freshGroup = await this.groupModel
+        .findById(groupId)
+        .lean()
+        .exec();
+      const isNowMember = freshGroup?.members?.some(
+        (m) => this.getEntityId(m.account) === targetAccountId,
+      );
+      if (isNowMember) {
+        throw new BadRequestException(this.msg("group.ALREADY_MEMBER"));
+      }
+      throw new BadRequestException(this.msg("group.ALREADY_INVITED"));
+    }
+
+    // 5. Send real-time notification to the invitee (non-blocking)
+    const actorAccount = await this.accountService
+      .findOne(actorId)
+      .catch(() => null);
+    const actorName =
+      actorAccount?.fullname || actorAccount?.username || "Một thành viên";
+    const roleLabel = targetRole === "manager" ? "Quản lý" : "Thành viên";
+
+    this.notificationService
+      .send(targetAccountId, "group_invitation_received", {
+        message: `${actorName} đã mời bạn tham gia nhóm "${group.name}" với vai trò ${roleLabel}.`,
+        groupId: groupId.toString(),
+        groupName: group.name,
+        role: targetRole,
+        invitedBy: {
+          _id: actorId,
+          username: actorAccount?.username,
+          fullname: actorAccount?.fullname,
+        },
+      })
+      .catch(() => null);
+
+    return this.findOne(groupId, actorId);
+  }
+
+  /**
+   * Get pending group invitations for the authenticated user
+   */
+  async getMyInvitations(userId: string): Promise<any[]> {
+    const userObjectId = new Types.ObjectId(userId);
+    const groups = await this.groupModel
+      .find(
+        { "invitations.account": userObjectId },
+        {
+          name: 1,
+          owner: 1,
+          invitations: { $elemMatch: { account: userObjectId } },
+          members: 1,
+          createdAt: 1,
+        },
+      )
+      .populate("owner", "username fullname")
+      .populate("invitations.invitedBy", "username fullname")
+      .lean()
+      .exec();
+
+    return groups.map((g: any) => {
+      const inv = g.invitations?.[0];
+      return {
+        groupId: g._id.toString(),
+        groupName: g.name,
+        owner: g.owner,
+        role: inv?.role || "member",
+        invitedBy: inv?.invitedBy,
+        invitedAt: inv?.invitedAt,
+        memberCount: g.members?.length || 0,
+        createdAt: g.createdAt,
+      };
+    });
+  }
+
+  /**
+   * Get invitations sent by the user or within groups owned by the user
+   */
+  async getSentInvitations(userId: string): Promise<any[]> {
+    const userObjectId = new Types.ObjectId(userId);
+    const groups = await this.groupModel
+      .find({
+        $or: [
+          { owner: userObjectId },
+          { "invitations.invitedBy": userObjectId },
+        ],
+        "invitations.0": { $exists: true },
+      })
+      .populate("owner", "username fullname")
+      .populate("invitations.account", "username fullname")
+      .populate("invitations.invitedBy", "username fullname")
+      .lean()
+      .exec();
+
+    const sentList: any[] = [];
+    for (const group of groups) {
+      const isOwner = this.getEntityId(group.owner) === userId;
+      for (const inv of (group as any).invitations || []) {
+        const isInviter = this.getEntityId(inv.invitedBy) === userId;
+        if (isOwner || isInviter) {
+          sentList.push({
+            groupId: (group as any)._id.toString(),
+            groupName: (group as any).name,
+            owner: (group as any).owner,
+            role: inv.role || "member",
+            account: inv.account,
+            invitedBy: inv.invitedBy,
+            invitedAt: inv.invitedAt,
+            memberCount: (group as any).members?.length || 0,
+            canCancel: true,
+          });
+        }
+      }
+    }
+
+    return sentList.sort(
+      (a, b) =>
+        new Date(b.invitedAt).getTime() - new Date(a.invitedAt).getTime(),
+    );
+  }
+
+  /**
+   * Respond to a group invitation (accept or reject)
+   */
+  async respondToInvitation(
+    groupId: string,
+    userId: string,
+    action: "accept" | "reject",
+  ): Promise<any> {
+    const userObjectId = new Types.ObjectId(userId);
+    const group = await this.groupModel.findById(groupId).exec();
+
+    if (!group) {
+      throw new NotFoundException(this.msg("group.NOT_FOUND"));
+    }
+
+    const invitation = group.invitations?.find(
+      (inv) => this.getEntityId(inv.account) === userId,
+    );
+
+    if (!invitation) {
+      throw new NotFoundException(this.msg("group.INVITATION_NOT_FOUND"));
+    }
+
+    const responderAccount = await this.accountService
+      .findOne(userId)
+      .catch(() => null);
+    const responderName =
+      responderAccount?.fullname ||
+      responderAccount?.username ||
+      "Người dùng";
+    const inviterId = this.getEntityId(invitation.invitedBy);
+
+    if (action === "reject") {
+      await this.groupModel.updateOne(
+        { _id: new Types.ObjectId(groupId) },
+        { $pull: { invitations: { account: userObjectId } } },
+      );
+
+      // Notify inviter (non-blocking)
+      if (inviterId) {
+        this.notificationService
+          .send(inviterId, "group_invitation_rejected", {
+            message: `${responderName} đã từ chối lời mời tham gia nhóm "${group.name}".`,
+            groupId,
+            groupName: group.name,
+            rejectedBy: {
+              _id: userId,
+              username: responderAccount?.username,
+              fullname: responderAccount?.fullname,
+            },
+          })
+          .catch(() => null);
+      }
+
+      return {
+        success: true,
+        message: "Đã từ chối lời mời tham gia nhóm.",
+        groupId,
+      };
+    }
+
+    // Action: "accept"
+    const ownerId = this.getEntityId(group.owner);
+    const maxMembersPerGroup =
+      await this.shortenerService.getMaxMembersPerGroup(ownerId);
+    const targetRole = invitation.role || "member";
+
+    // Atomic move from invitations to members with maxMembers condition
+    const updated = await this.groupModel.findOneAndUpdate(
+      {
+        _id: new Types.ObjectId(groupId),
+        "invitations.account": userObjectId,
+        "members.account": { $ne: userObjectId },
+        [`members.${maxMembersPerGroup - 1}`]: { $exists: false },
+      },
+      {
+        $pull: { invitations: { account: userObjectId } },
+        $push: {
           members: {
-            account: new Types.ObjectId(targetAccountId),
+            account: userObjectId,
             role: targetRole,
           },
         },
@@ -296,7 +571,87 @@ export class GroupService {
       { new: true },
     );
 
-    return this.findOne(groupId, actorId);
+    if (!updated) {
+      // Re-fetch to distinguish between full capacity vs invalid invitation
+      const freshGroup = await this.groupModel.findById(groupId).lean().exec();
+      if (!freshGroup) {
+        throw new NotFoundException(this.msg("group.NOT_FOUND"));
+      }
+      if ((freshGroup.members?.length ?? 0) >= maxMembersPerGroup) {
+        throw new BadRequestException(
+          this.msg("group.MAX_MEMBERS_REACHED", maxMembersPerGroup),
+        );
+      }
+      throw new NotFoundException(this.msg("group.INVITATION_NOT_FOUND"));
+    }
+
+    // Notify inviter that invitation was accepted (non-blocking)
+    if (inviterId) {
+      this.notificationService
+        .send(inviterId, "group_invitation_accepted", {
+          message: `${responderName} đã chấp nhận lời mời tham gia nhóm "${group.name}".`,
+          groupId,
+          groupName: group.name,
+          role: targetRole,
+          acceptedBy: {
+            _id: userId,
+            username: responderAccount?.username,
+            fullname: responderAccount?.fullname,
+          },
+        })
+        .catch(() => null);
+    }
+
+    return this.findOne(groupId, userId);
+  }
+
+  /**
+   * Cancel / revoke a pending group invitation
+   */
+  async cancelInvitation(
+    groupId: string,
+    targetUserId: string,
+    actorId: string,
+    actorRole?: string,
+  ): Promise<Group> {
+    const group = await this.findOne(groupId, actorId, actorRole);
+    const currentRole = this.getMemberRole(group, actorId);
+
+    if (
+      !this.isAdminRole(actorRole) &&
+      (!currentRole || (currentRole !== "owner" && currentRole !== "manager"))
+    ) {
+      throw new ForbiddenException(
+        this.msg("group.ONLY_OWNER_OR_MANAGER_CANCEL_INVITE"),
+      );
+    }
+
+    const targetObjectId = new Types.ObjectId(targetUserId);
+    const invitation = group.invitations?.find(
+      (inv) => this.getEntityId(inv.account) === targetUserId,
+    );
+
+    if (!invitation) {
+      throw new NotFoundException(this.msg("group.INVITATION_NOT_FOUND"));
+    }
+
+    // Group manager can only cancel invitations for "member" role
+    if (
+      !this.isAdminRole(actorRole) &&
+      currentRole === "manager" &&
+      invitation.role !== "member"
+    ) {
+      throw new ForbiddenException(
+        this.msg("group.MANAGER_CAN_ONLY_REMOVE_MEMBER"),
+      );
+    }
+
+    await this.groupModel.updateOne(
+      { _id: new Types.ObjectId(groupId) },
+      { $pull: { invitations: { account: targetObjectId } } },
+    );
+
+    return this.findOne(groupId, actorId, actorRole);
   }
 
   async getMembers(
@@ -352,6 +707,57 @@ export class GroupService {
     );
 
     return this.findOne(groupId, actorId);
+  }
+
+  /**
+   * Leave a group (for members or managers)
+   * The owner cannot leave their own group (must transfer ownership or delete).
+   */
+  async leaveGroup(
+    groupId: string,
+    userId: string,
+  ): Promise<{ message: string }> {
+    const group = await this.groupModel.findById(groupId);
+    if (!group) {
+      throw new NotFoundException(this.msg("group.NOT_FOUND"));
+    }
+
+    // 1. Guard: The owner cannot leave the group
+    if (group.owner.toString() === userId) {
+      throw new BadRequestException(this.msg("group.OWNER_CANNOT_LEAVE"));
+    }
+
+    // 2. Check if the user is currently an active member
+    const isMember = group.members.some(
+      (m) => m.account.toString() === userId,
+    );
+    if (!isMember) {
+      throw new NotFoundException(this.msg("group.NOT_A_MEMBER"));
+    }
+
+    // 3. Atomically remove user from members array
+    await this.groupModel.updateOne(
+      { _id: groupId },
+      { $pull: { members: { account: new Types.ObjectId(userId) } } },
+    );
+
+    // 4. Send real-time notification to the group owner (non-blocking)
+    const actorAccount = await this.accountService
+      .findOne(userId)
+      .catch(() => null);
+    const actorName =
+      actorAccount?.fullname || actorAccount?.username || "Một thành viên";
+
+    this.notificationService
+      .send(group.owner.toString(), "group_member_left", {
+        message: `${actorName} đã rời khỏi nhóm "${group.name}".`,
+        groupId: groupId.toString(),
+        groupName: group.name,
+        userId,
+      })
+      .catch(() => null);
+
+    return { message: this.msg("group.LEAVE_GROUP_SUCCESS") };
   }
 
   async addLinks(

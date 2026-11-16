@@ -1,4 +1,4 @@
-import { Module } from "@nestjs/common";
+import { Module, forwardRef } from "@nestjs/common";
 import { MongooseModule } from "@nestjs/mongoose";
 import { NotificationService } from "./notification.service";
 import { NotificationController } from "./notification.controller";
@@ -20,8 +20,8 @@ import { ConfigManagerService } from "../config/config-manager.service";
     MongooseModule.forFeature([
       { name: Notification.name, schema: NotificationSchema },
     ]),
-    AuthModule,
-    AccountModule,
+    forwardRef(() => AuthModule),
+    forwardRef(() => AccountModule),
     RedisModule,
   ],
   controllers: [NotificationController],

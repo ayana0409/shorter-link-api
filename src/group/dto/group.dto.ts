@@ -35,3 +35,9 @@ export class AddGroupMemberDto {
   @IsIn(["manager", "member"])
   role?: "manager" | "member";
 }
+
+export class RespondGroupInvitationDto {
+  @IsString()
+  @IsIn(["accept", "reject"])
+  action!: "accept" | "reject";
+}

@@ -2,6 +2,8 @@ import {
   BadRequestException,
   Injectable,
   NotFoundException,
+  Inject,
+  forwardRef,
 } from "@nestjs/common";
 import { InjectModel } from "@nestjs/mongoose/dist";
 import { CreateShortenerDto } from "./dto/create-shortener.dto";
@@ -29,6 +31,7 @@ export class ShortenerService {
     @InjectModel(Shortener.name) private shortenerModel: Model<Shortener>,
     private configService: ConfigService,
     private configManagerService: ConfigManagerService,
+    @Inject(forwardRef(() => AccountService))
     private accountService: AccountService,
     private i18n: I18nService,
     private moduleRef: NestModuleRef,

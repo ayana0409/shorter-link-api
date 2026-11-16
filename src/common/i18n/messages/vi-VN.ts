@@ -109,6 +109,20 @@ export const MESSAGES_VI = {
       `Không tìm thấy tài khoản với tên đăng nhập hoặc ID '${identifier}'.`,
     ACCOUNT_NOT_FOUND_BY_USERNAME: (username: string) =>
       `Không tìm thấy tài khoản với tên đăng nhập '${username}'.`,
+    INVITATION_NOT_FOUND:
+      "Không tìm thấy lời mời tham gia nhóm hoặc lời mời đã hết hiệu lực.",
+    ALREADY_INVITED: "Tài khoản này đã được mời và đang chờ xác nhận.",
+    ALREADY_MEMBER: "Tài khoản này đã là thành viên của nhóm.",
+    CANNOT_INVITE_SELF: "Không thể tự gửi lời mời cho chính mình.",
+    ONLY_OWNER_OR_MANAGER_CANCEL_INVITE:
+      "Chỉ chủ sở hữu hoặc quản lý nhóm mới có thể hủy lời mời.",
+    INVITATION_CANCELLED_SUCCESS: "Đã hủy lời mời tham gia nhóm thành công.",
+    OWNER_CANNOT_LEAVE:
+      "Chủ nhóm không thể rời nhóm. Vui lòng chuyển nhượng quyền sở hữu hoặc xóa nhóm.",
+    NOT_A_MEMBER: "Bạn không phải là thành viên của nhóm này.",
+    LEAVE_GROUP_SUCCESS: "Bạn đã rời khỏi nhóm thành công.",
+    MEMBER_LEFT_NOTIFICATION: (name: string, groupName: string) =>
+      `${name} đã rời khỏi nhóm "${groupName}".`,
   },
 
   // ==================== COMMON / GENERAL ====================

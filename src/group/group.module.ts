@@ -6,6 +6,7 @@ import { Group, GroupSchema } from "./schemas/group.schema";
 import { ShortenerModule } from "../shortener/shortener.module";
 import { AuthModule } from "../auth/auth.module";
 import { AccountModule } from "../account/account.module";
+import { NotificationModule } from "../notification";
 
 @Module({
   imports: [
@@ -13,6 +14,7 @@ import { AccountModule } from "../account/account.module";
     forwardRef(() => ShortenerModule),
     forwardRef(() => AuthModule),
     forwardRef(() => AccountModule),
+    forwardRef(() => NotificationModule),
   ],
   controllers: [GroupController],
   providers: [GroupService],

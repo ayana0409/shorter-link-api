@@ -9,6 +9,8 @@ import {
   UseGuards,
   Query,
   Request,
+  Inject,
+  forwardRef,
 } from "@nestjs/common";
 import { AccountService } from "./account.service";
 import { CreateAccountDto } from "./dto/create-account.dto";
@@ -23,7 +25,9 @@ import { GroupService } from "../group/group.service";
 export class AccountController {
   constructor(
     private readonly accountService: AccountService,
+    @Inject(forwardRef(() => ShortenerService))
     private readonly shortenerService: ShortenerService,
+    @Inject(forwardRef(() => GroupService))
     private readonly groupService: GroupService,
   ) {}
 

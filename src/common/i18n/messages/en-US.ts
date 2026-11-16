@@ -104,6 +104,20 @@ export const MESSAGES_EN = {
       `Account with id or username '${identifier}' not found.`,
     ACCOUNT_NOT_FOUND_BY_USERNAME: (username: string) =>
       `Account with username '${username}' not found.`,
+    INVITATION_NOT_FOUND: "Group invitation not found or no longer valid.",
+    ALREADY_INVITED:
+      "This account has already been invited and is pending confirmation.",
+    ALREADY_MEMBER: "This account is already a member of the group.",
+    CANNOT_INVITE_SELF: "You cannot invite yourself to the group.",
+    ONLY_OWNER_OR_MANAGER_CANCEL_INVITE:
+      "Only the owner or a group manager can cancel invitations.",
+    INVITATION_CANCELLED_SUCCESS: "Group invitation cancelled successfully.",
+    OWNER_CANNOT_LEAVE:
+      "The group owner cannot leave the group. Please transfer ownership or delete the group.",
+    NOT_A_MEMBER: "You are not a member of this group.",
+    LEAVE_GROUP_SUCCESS: "You have left the group successfully.",
+    MEMBER_LEFT_NOTIFICATION: (name: string, groupName: string) =>
+      `${name} has left the group "${groupName}".`,
   },
 
   // ==================== COMMON / GENERAL ====================

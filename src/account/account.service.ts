@@ -22,6 +22,7 @@ import { LevelService } from "./level.service";
 import { I18nService } from "../common/i18n";
 import { RedisService } from "../redis";
 import { ModuleRef } from "@nestjs/core";
+import { GroupService } from "../group/group.service";
 
 @Injectable()
 export class AccountService {
@@ -299,6 +300,17 @@ export class AccountService {
     }
     // Invalidate user permissions cache
     await this.execRedis((redis) => redis.invalidateUserPermissions(id));
+
+    // Cleanup group references (members and pending invitations)
+    try {
+      const groupService = this.moduleRef.get(GroupService, { strict: false });
+      if (groupService) {
+        await groupService.cleanupAccountReferences(id);
+      }
+    } catch {
+      // Ignore cleanup error if group service is not available
+    }
+
     return account;
   }
 
